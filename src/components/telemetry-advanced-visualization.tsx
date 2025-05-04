@@ -117,7 +117,7 @@ const applyImprovedComplementaryFilter = (data: SensorDataPoint[], alpha = 0.98)
   
   // Distanza del sensore dal centro di massa (in metri)
   // Questo valore dovrebbe essere calibrato in base al razzo specifico
-  const distanceFromCM = 0.30; // 30 cm di esempio, regolare in base al razzo reale
+  const distanceFromCM = 0.030; // 30 cm di esempio, regolare in base al razzo reale
   
   // Vettore di posizione del sensore rispetto al CM nel sistema di coordinate del corpo (razzo)
   // Assumendo che il sensore sia posizionato sull'asse longitudinale del razzo, verso la punta
@@ -718,29 +718,31 @@ function compensateAcceleration(
     ctx.fillStyle = '#d0d0d0';
     ctx.strokeStyle = '#000';
     ctx.lineWidth = 1;
-    // CORREZIONE: Il rettangolo è posizionato in modo che la punta sia nella direzione positiva dell'asse Y
+    
+    // Il corpo del razzo è centrato sull'origine
     ctx.beginPath();
     ctx.rect(-rocketWidth / 2, -rocketLength / 2, rocketWidth, rocketLength);
     ctx.fill();
     ctx.stroke();
     
-    // Disegna la punta del razzo nella direzione positiva dell'asse Y (verso l'alto)
+    // CORREZIONE: La punta del razzo deve essere disegnata nella parte inferiore
+    // (visivamente verso il basso nel canvas, ma rappresenta "l'alto" del razzo)
     ctx.fillStyle = '#ff4444';
     ctx.beginPath();
-    ctx.moveTo(-rocketWidth / 2, -rocketLength / 2);
-    ctx.lineTo(0, -rocketLength / 2 - 20);
-    ctx.lineTo(rocketWidth / 2, -rocketLength / 2);
+    ctx.moveTo(-rocketWidth / 2, rocketLength / 2);  // Punto in basso a sinistra
+    ctx.lineTo(0, rocketLength / 2 + 20);           // Punta in basso
+    ctx.lineTo(rocketWidth / 2, rocketLength / 2);   // Punto in basso a destra
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
     
-    // Le alette alla base del razzo (direzione negativa dell'asse Y)
+    // Le alette alla base del razzo (in alto nel disegno)
     // Aletta 1 (sinistra)
     ctx.fillStyle = '#4444ff';
     ctx.beginPath();
-    ctx.moveTo(-rocketWidth / 2, rocketLength / 2);
-    ctx.lineTo(-rocketWidth / 2 - 15, rocketLength / 2 + 20);
-    ctx.lineTo(-rocketWidth / 2, rocketLength / 2 - 10);
+    ctx.moveTo(-rocketWidth / 2, -rocketLength / 2);
+    ctx.lineTo(-rocketWidth / 2 - 15, -rocketLength / 2 - 20);
+    ctx.lineTo(-rocketWidth / 2, -rocketLength / 2 + 10);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
@@ -748,9 +750,9 @@ function compensateAcceleration(
     // Aletta 2 (destra)
     ctx.fillStyle = '#4444ff';
     ctx.beginPath();
-    ctx.moveTo(rocketWidth / 2, rocketLength / 2);
-    ctx.lineTo(rocketWidth / 2 + 15, rocketLength / 2 + 20);
-    ctx.lineTo(rocketWidth / 2, rocketLength / 2 - 10);
+    ctx.moveTo(rocketWidth / 2, -rocketLength / 2);
+    ctx.lineTo(rocketWidth / 2 + 15, -rocketLength / 2 - 20);
+    ctx.lineTo(rocketWidth / 2, -rocketLength / 2 + 10);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
@@ -758,9 +760,9 @@ function compensateAcceleration(
     // Aletta 3 (posteriore - in diverso colore per distinguere meglio la rotazione yaw)
     ctx.fillStyle = '#44ff44';
     ctx.beginPath();
-    ctx.moveTo(0, rocketLength / 2);
-    ctx.lineTo(0, rocketLength / 2 + 20);
-    ctx.lineTo(10, rocketLength / 2 - 5);
+    ctx.moveTo(0, -rocketLength / 2);
+    ctx.lineTo(0, -rocketLength / 2 - 20);
+    ctx.lineTo(10, -rocketLength / 2 + 5);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
@@ -768,9 +770,9 @@ function compensateAcceleration(
     // Aletta 4 (anteriore - in diverso colore per distinguere meglio la rotazione yaw)
     ctx.fillStyle = '#ff44ff';
     ctx.beginPath();
-    ctx.moveTo(0, rocketLength / 2);
-    ctx.lineTo(0, rocketLength / 2 + 20);
-    ctx.lineTo(-10, rocketLength / 2 - 5);
+    ctx.moveTo(0, -rocketLength / 2);
+    ctx.lineTo(0, -rocketLength / 2 - 20);
+    ctx.lineTo(-10, -rocketLength / 2 + 5);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
@@ -797,13 +799,13 @@ function compensateAcceleration(
     ctx.fill();
     ctx.stroke();
     
-    // CORREZIONE: La punta del razzo deve puntare verso il nord
+    // CORREZIONE: La punta del razzo deve puntare verso il sud
     // Freccia di direzione (punta del razzo)
     ctx.fillStyle = '#ff4444';
     ctx.beginPath();
-    ctx.moveTo(0, -topLength / 2 - 10);
-    ctx.lineTo(-8, -topLength / 2);
-    ctx.lineTo(8, -topLength / 2);
+    ctx.moveTo(0, topLength / 2 + 10);  // Punta a sud
+    ctx.lineTo(-8, topLength / 2);
+    ctx.lineTo(8, topLength / 2);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
@@ -814,25 +816,25 @@ function compensateAcceleration(
     // Alette laterali (blu)
     ctx.fillStyle = '#4444ff';
     ctx.beginPath();
-    ctx.ellipse(-topWidth / 2 - 5, finOffset, 5, 10, 0, 0, Math.PI * 2);
+    ctx.ellipse(-topWidth / 2 - 5, -finOffset, 5, 10, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     
     ctx.beginPath();
-    ctx.ellipse(topWidth / 2 + 5, finOffset, 5, 10, 0, 0, Math.PI * 2);
+    ctx.ellipse(topWidth / 2 + 5, -finOffset, 5, 10, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     
     // Alette avant/retro (verde/magenta)
     ctx.fillStyle = '#44ff44';
     ctx.beginPath();
-    ctx.ellipse(0, topLength / 2 + 5, 10, 5, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, -topLength / 2 - 5, 10, 5, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     
     ctx.fillStyle = '#ff44ff';
     ctx.beginPath();
-    ctx.ellipse(0, -finOffset, 10, 5, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, finOffset, 10, 5, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     
@@ -858,7 +860,9 @@ function compensateAcceleration(
     // Se il pitch è positivo, il razzo punta leggermente verso l'osservatore
     // Se il pitch è negativo, il razzo punta leggermente lontano dall'osservatore
     // Questo si traduce in una leggera ellissi
-    const pitchEffect = Math.abs(Math.cos(pitchRad)); // Aggiungiamo Math.abs() per evitare valori negativi
+    // Utilizziamo Math.abs() per garantire che il raggio sia sempre positivo
+    // ed evitiamo l'errore "Failed to execute 'ellipse': radius provided is negative"
+    const pitchEffect = Math.abs(Math.cos(pitchRad));
     
     // Disegna il corpo del razzo visto frontalmente
     ctx.fillStyle = '#e0e0e0';
@@ -924,6 +928,7 @@ function compensateAcceleration(
     
     ctx.restore();
   }
+  
   
   // Funzione per disegnare i vettori di accelerazione
   function drawAccelerationVectors(

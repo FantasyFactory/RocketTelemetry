@@ -152,22 +152,22 @@ const TelemetryVisualization: React.FC = () => {
   };
 
   // Versione migliorata della funzione fetchRealtimeData
+  // Modifica la funzione fetchRealtimeData per gestire correttamente i timestamp relativi
   const fetchRealtimeData = async (): Promise<void> => {
     let retries = 3; // Numero di tentativi in caso di errore
     
     const attemptFetch = async (): Promise<void> => {
       try {
+        // Qui userei l'API reale o il mock API a seconda delle necessità
         const jsonData = await mockRocketApi();
-        
-        /*    
+        /*
         const response = await fetch('http://192.168.4.1/imudata', {
-          // Aggiungi un timeout per evitare attese infinite
           signal: AbortSignal.timeout(2000)
         });
         
         if (!response.ok) {
           throw new Error(`Errore nella richiesta: ${response.status}`);
-        } 
+        }
         
         const jsonData = await response.json();
         */
@@ -175,17 +175,24 @@ const TelemetryVisualization: React.FC = () => {
         // Timestamp attuale in millisecondi
         const currentTimestamp = Date.now();
         
-        // Crea un nuovo punto dati
+        // Se è il primo punto, imposta il timestamp di riferimento
+        if (data.length === 0) {
+          setFirstFetchTimestamp(currentTimestamp);
+        }
+        
+        // Calcolo del timestamp relativo rispetto al primo punto
+        const relativeTime = (currentTimestamp - firstFetchTimestamp) / 1000; // in secondi
+        
+        // Crea un nuovo punto dati con un timestamp relativo
         const newDataPoint: SensorDataPoint = {
           timestamp: jsonData.system.millis,
-          relativeTime: (currentTimestamp - firstFetchTimestamp) / 1000, // in secondi
+          relativeTime: relativeTime, // Usa il tempo relativo dall'inizio della sessione
           accelX: jsonData.sensors.accel.x,
           accelY: jsonData.sensors.accel.y,
           accelZ: jsonData.sensors.accel.z,
           gyroX: jsonData.sensors.gyro.x,
           gyroY: jsonData.sensors.gyro.y,
           gyroZ: jsonData.sensors.gyro.z,
-          // Se l'altitudine è presente nei dati, la utilizziamo, altrimenti impostiamo un valore predefinito
           altitude: jsonData.sensors.altitude !== undefined ? jsonData.sensors.altitude : 0
         };
         
@@ -234,6 +241,7 @@ const TelemetryVisualization: React.FC = () => {
     
     await attemptFetch();
   };
+
 
   // Funzione per avviare il recupero dei dati in tempo reale
   const startRealtimeData = (): void => {
@@ -298,8 +306,12 @@ const TelemetryVisualization: React.FC = () => {
   const loadDefaultFile = async (): Promise<void> => {
     try {
       setIsLoading(true);
-      // Utilizziamo il tipo definito in index.d.ts per window.fs
-      const fileContent = await (window as any).fs.readFile('paste.txt', { encoding: 'utf8' });
+      // Utilizziamo fetch invece di window.fs.readFile
+      const response = await fetch('/paste.txt');
+      if (!response.ok) {
+        throw new Error(`Errore nel caricamento del file: ${response.status}`);
+      }
+      const fileContent = await response.text();
       processData(fileContent);
     } catch (error) {
       console.error('Errore nel caricamento del file predefinito:', error);
@@ -407,20 +419,19 @@ const TelemetryVisualization: React.FC = () => {
     ctx.fillStyle = '#0000ff';
     ctx.fillText('Z', 10 + axisLength * 0.7 + 5, height - 10 - axisLength * 0.7 - 5);
     
+    // Salva lo stato del canvas e traduci al centro
     ctx.save();
     ctx.translate(centerX, centerY);
     
-    // Ruota di 180 gradi in pitch per mettere la punta del razzo verso l'alto inizialmente
-    const initialPitch = Math.PI;
-    
-    // CORREZIONE: Applicazione delle rotazioni con ordine corretto per visualizzare meglio lo yaw
-    // Primo passo: rotazione per lo yaw (attorno all'asse Z)
+    // Applica le rotazioni nell'ordine corretto
+    // Prima rotazione: yaw (rotazione attorno all'asse Z)
     ctx.rotate(yaw);
     
-    // Secondo passo: rotazione per il pitch (attorno all'asse Y)
-    ctx.rotate(pitch + initialPitch);
+    // Seconda rotazione: pitch (rotazione attorno all'asse Y)
+    // Ruotiamo di 180 + pitch per avere la punta verso l'alto
+    ctx.rotate(Math.PI + pitch);
     
-    // Terzo passo: rotazione per il roll (attorno all'asse X)
+    // Terza rotazione: roll (rotazione attorno all'asse X)
     ctx.rotate(roll);
     
     // Disegna il corpo del razzo
@@ -441,9 +452,36 @@ const TelemetryVisualization: React.FC = () => {
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+  
+    // Disegna un indicatore di orientamento visibile dall'alto
+    // Una freccia sopra il razzo che indica la direzione di volo
+    ctx.fillStyle = '#ff8800';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+  
+    // Disegna la base dell'indicatore
+    ctx.beginPath();
+    ctx.arc(0, -rocketLength / 2 - 10, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  
+    // Disegna una freccia che punta in avanti
+    ctx.beginPath();
+    ctx.moveTo(0, -rocketLength / 2 - 18);  // Punta della freccia
+    ctx.lineTo(-5, -rocketLength / 2 - 10); // Lato sinistro
+    ctx.lineTo(5, -rocketLength / 2 - 10);  // Lato destro
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  
+    // Disegna un punto di riferimento di colore contrastante sulla punta
+    ctx.fillStyle = '#ff00ff';
+    ctx.beginPath();
+    ctx.arc(0, -rocketLength / 2 - 25, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
     
     // Disegna le alette con colori più visibili per distinguere l'orientamento
-    
     // Aletta 1 (sinistra)
     ctx.fillStyle = '#4444ff';
     ctx.beginPath();
@@ -484,15 +522,8 @@ const TelemetryVisualization: React.FC = () => {
     ctx.fill();
     ctx.stroke();
     
-    // Aggiungi un indicatore di direzione per visualizzare meglio lo yaw
-    ctx.fillStyle = '#ff8800';
-    ctx.beginPath();
-    ctx.arc(0, -rocketLength / 2 - 10, 5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
     // Disegna i vettori di accelerazione
-    const accelScale = 50; // Scala per il vettore di accelerazione
+    const accelScale = 50;
     
     // Vettore X (rosso)
     const accelX = currentPoint.accelX * accelScale;
@@ -500,7 +531,7 @@ const TelemetryVisualization: React.FC = () => {
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.lineTo(0, -accelX);  // L'asse X del razzo punta verso la punta
+    ctx.lineTo(0, -accelX);
     ctx.stroke();
     
     // Freccia X
@@ -527,7 +558,7 @@ const TelemetryVisualization: React.FC = () => {
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.lineTo(accelY, 0);  // L'asse Y del razzo è laterale
+    ctx.lineTo(accelY, 0);
     ctx.stroke();
     
     // Freccia Y
@@ -554,7 +585,7 @@ const TelemetryVisualization: React.FC = () => {
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.lineTo(0, accelZ);  // L'asse Z del razzo è verso la parte posteriore
+    ctx.lineTo(0, accelZ);
     ctx.stroke();
     
     // Freccia Z
@@ -603,8 +634,9 @@ const TelemetryVisualization: React.FC = () => {
       ctx.fill();
     }
     
+    // Ripristina lo stato del canvas
     ctx.restore();
-
+    
     // Disegna la legenda
     ctx.font = '14px Arial';
     ctx.fillStyle = '#000';

@@ -383,12 +383,94 @@ const TelemetryVisualization: React.FC = () => {
     const centerX = width / 2;
     const centerY = height / 2;
     
-    // Converte gli angoli in radianti
-    const rollRad = filter && currentPoint.roll ? degToRad(currentPoint.roll) : 0;
-    const pitchRad = filter && currentPoint.pitch ? degToRad(currentPoint.pitch) : 0;
-    const yawRad = filter && currentPoint.yaw ? degToRad(currentPoint.yaw) : 0;
+    // Ottieni gli angoli in radianti
+    const rollRad = filter && currentPoint.roll !== undefined ? degToRad(currentPoint.roll) : 0;
+    const pitchRad = filter && currentPoint.pitch !== undefined ? degToRad(currentPoint.pitch) : 0;
+    const yawRad = filter && currentPoint.yaw !== undefined ? degToRad(currentPoint.yaw) : 0;
+    
+    // Definizione di accelScale per i vettori di accelerazione
+    const accelScale = 50;
     
     // Disegna gli assi di riferimento
+    drawReferenceAxes(ctx, width, height);
+    
+    // Dividi il canvas in due parti: vista laterale e vista dall'alto
+    const mainViewSize = Math.min(width, height) * 0.6;
+    const topViewSize = Math.min(width, height) * 0.25;
+    
+    // Vista principale (laterale, mostra principalmente pitch e roll)
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    
+    // Applica le rotazioni per la vista laterale
+    // Prima roll, poi pitch
+    ctx.rotate(rollRad);
+    ctx.rotate(pitchRad);
+    
+    // Disegna il razzo nella vista laterale
+    drawRocketSideView(ctx, rocketWidth, rocketLength);
+    
+    ctx.restore();
+    
+    // Vista dall'alto (mostra principalmente yaw e roll)
+    ctx.save();
+    ctx.translate(width - topViewSize/2 - 20, topViewSize/2 + 20);
+    
+    // Disegna lo sfondo della vista dall'alto
+    ctx.fillStyle = '#f0f0f0';
+    ctx.beginPath();
+    ctx.arc(0, 0, topViewSize/2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#444';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    
+    // Applica rotazione yaw
+    ctx.rotate(yawRad);
+    
+    // Disegna il razzo dall'alto
+    drawRocketTopView(ctx, rocketWidth, rocketLength, rollRad);
+    
+    ctx.restore();
+    
+    // Vista frontale (mostra principalmente roll e parte di yaw)
+    ctx.save();
+    ctx.translate(topViewSize/2 + 20, topViewSize/2 + 20);
+    
+    // Disegna lo sfondo della vista frontale
+    ctx.fillStyle = '#f0f0e0';
+    ctx.beginPath();
+    ctx.arc(0, 0, topViewSize/2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#444';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    
+    // Applica rotazioni per la vista frontale
+    ctx.rotate(rollRad); // Il roll è la rotazione principale visibile frontalmente
+    
+    // Disegna il razzo dalla parte frontale
+    drawRocketFrontView(ctx, rocketWidth, pitchRad);
+    
+    ctx.restore();
+    
+    // Disegna le etichette per le viste
+    ctx.font = '12px Arial';
+    ctx.fillStyle = '#000';
+    ctx.fillText('Vista Laterale', centerX - 40, centerY + mainViewSize/2 + 15);
+    ctx.fillText('Vista dall\'Alto', width - topViewSize - 15, 15);
+    ctx.fillText('Vista Frontale', 20, 15);
+    
+    // Disegna i vettori di accelerazione sulla vista principale
+    drawAccelerationVectors(ctx, centerX, centerY, currentPoint, accelScale);
+    
+    // Disegna la legenda
+    drawLegend(ctx, width, height);
+    
+  }, [currentPoint, filter, rocketWidth, rocketLength]);
+  
+  // Funzione per disegnare gli assi di riferimento
+  function drawReferenceAxes(ctx: CanvasRenderingContext2D, width: number, height: number) {
     const axisLength = 40;
     ctx.lineWidth = 1;
     
@@ -418,67 +500,228 @@ const TelemetryVisualization: React.FC = () => {
     ctx.stroke();
     ctx.fillStyle = '#0000ff';
     ctx.fillText('Z', 10 + axisLength * 0.7 + 5, height - 10 - axisLength * 0.7 - 5);
-    
-    // Salva lo stato del canvas e traduci al centro
-    ctx.save();
-    ctx.translate(centerX, centerY);
-    
-    // SOLUZIONE MIGLIORATA: Utilizziamo la matrice di rotazione completa
-    // Invece di applicare rotazioni sequenziali che possono causare problemi di gimbal lock,
-    // possiamo disegnare il razzo in diverse posizioni per mostrare chiaramente lo yaw
-    
-    // Per mostrare chiaramente lo yaw, disegniamo il razzo dall'alto
-    
-    // Prima spostiamo il razzo in una posizione in cui la punta è verso l'alto (direzione Z)
-    ctx.save();
-    
-    // Ruotazione yaw - rotazione attorno all'asse Y
-    ctx.rotate(yawRad);
-    
-    // Desenha o corpo do foguete
-    drawRocket(ctx, rocketWidth, rocketLength, rollRad, pitchRad);
-    
-    // Ripristina lo stato
-    ctx.restore();
-    
-    // Ora disegniamo una vista dall'alto per mostrare chiaramente lo yaw
-    // Spostiamo la vista in alto a destra del canvas principale
-    ctx.save();
-    ctx.translate(width/2 - 70, -height/2 + 70);
-    
-    // Disegna un cerchio come sfondo per la vista dall'alto
-    ctx.fillStyle = '#f0f0f0';
-    ctx.beginPath();
-    ctx.arc(0, 0, 30, 0, Math.PI * 2);
-    ctx.fill();
+  }
+  
+  // Funzione per disegnare il razzo nella vista laterale
+  function drawRocketSideView(ctx: CanvasRenderingContext2D, rocketWidth: number, rocketLength: number) {
+    // Disegna il corpo del razzo
+    ctx.fillStyle = '#d0d0d0';
     ctx.strokeStyle = '#000';
     ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.rect(-rocketWidth / 2, -rocketLength / 2, rocketWidth, rocketLength);
+    ctx.fill();
     ctx.stroke();
     
-    // Disegna una freccia che indica la direzione del razzo (vista dall'alto)
-    ctx.save();
-    ctx.rotate(yawRad);
-    
-    // Corpo della freccia
-    ctx.fillStyle = '#444';
+    // Disegna la punta del razzo
+    ctx.fillStyle = '#ff4444';
     ctx.beginPath();
-    ctx.moveTo(0, -20);  // Punta della freccia
-    ctx.lineTo(-8, 0);   // Base sinistra
-    ctx.lineTo(8, 0);    // Base destra
+    ctx.moveTo(-rocketWidth / 2, -rocketLength / 2);
+    ctx.lineTo(0, -rocketLength / 2 - 20);
+    ctx.lineTo(rocketWidth / 2, -rocketLength / 2);
     ctx.closePath();
     ctx.fill();
+    ctx.stroke();
     
-    // Testo "N" (Nord) per indicare il riferimento
+    // Disegna le alette con colori più visibili per distinguere l'orientamento
+    // Aletta 1 (sinistra)
+    ctx.fillStyle = '#4444ff';
+    ctx.beginPath();
+    ctx.moveTo(-rocketWidth / 2, rocketLength / 2);
+    ctx.lineTo(-rocketWidth / 2 - 15, rocketLength / 2 + 20);
+    ctx.lineTo(-rocketWidth / 2, rocketLength / 2 - 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Aletta 2 (destra)
+    ctx.fillStyle = '#4444ff';
+    ctx.beginPath();
+    ctx.moveTo(rocketWidth / 2, rocketLength / 2);
+    ctx.lineTo(rocketWidth / 2 + 15, rocketLength / 2 + 20);
+    ctx.lineTo(rocketWidth / 2, rocketLength / 2 - 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Aletta 3 (posteriore - in diverso colore per distinguere meglio la rotazione yaw)
+    ctx.fillStyle = '#44ff44';
+    ctx.beginPath();
+    ctx.moveTo(0, rocketLength / 2);
+    ctx.lineTo(0, rocketLength / 2 + 20);
+    ctx.lineTo(10, rocketLength / 2 - 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Aletta 4 (anteriore - in diverso colore per distinguere meglio la rotazione yaw)
+    ctx.fillStyle = '#ff44ff';
+    ctx.beginPath();
+    ctx.moveTo(0, rocketLength / 2);
+    ctx.lineTo(0, rocketLength / 2 + 20);
+    ctx.lineTo(-10, rocketLength / 2 - 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+  
+  // Funzione per disegnare il razzo nella vista dall'alto
+  function drawRocketTopView(ctx: CanvasRenderingContext2D, rocketWidth: number, rocketLength: number, rollRad: number) {
+    // Nell'ottica dall'alto, vediamo il razzo schiacciato
+    const topWidth = rocketWidth;
+    const topLength = rocketLength * 0.75;
+    
+    // Disegna il corpo del razzo dall'alto
+    ctx.fillStyle = '#e0e0e0';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    
+    // Applica roll per vedere la rotazione anche nella vista dall'alto
+    ctx.save();
+    ctx.rotate(rollRad / 3); // Diminuiamo l'effetto del roll per non confondere
+    
+    // Usiamo un'ellisse per rappresentare il razzo visto dall'alto
+    ctx.beginPath();
+    ctx.ellipse(0, 0, topWidth / 2, topLength / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    
+    // Freccia di direzione (punta del razzo)
+    ctx.fillStyle = '#ff4444';
+    ctx.beginPath();
+    ctx.moveTo(0, -topLength / 2 - 10);
+    ctx.lineTo(-8, -topLength / 2);
+    ctx.lineTo(8, -topLength / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Indicatore per le alette viste dall'alto
+    const finOffset = topLength / 3;
+    
+    // Alette laterali (blu)
+    ctx.fillStyle = '#4444ff';
+    ctx.beginPath();
+    ctx.ellipse(-topWidth / 2 - 5, finOffset, 5, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    
+    ctx.beginPath();
+    ctx.ellipse(topWidth / 2 + 5, finOffset, 5, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    
+    // Alette avant/retro (verde/magenta)
+    ctx.fillStyle = '#44ff44';
+    ctx.beginPath();
+    ctx.ellipse(0, topLength / 2 + 5, 10, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    
+    ctx.fillStyle = '#ff44ff';
+    ctx.beginPath();
+    ctx.ellipse(0, -finOffset, 10, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    
     ctx.restore();
+    
+    // Disegna punti cardinali per il riferimento di yaw
     ctx.fillStyle = '#000';
     ctx.font = '10px Arial';
-    ctx.fillText('N', 0, -33);
+    ctx.fillText('N', 0, -topLength / 2 - 15);
+    ctx.fillText('S', 0, topLength / 2 + 15);
+    ctx.fillText('E', topLength / 2 + 15, 0);
+    ctx.fillText('W', -topLength / 2 - 15, 0);
+  }
+  
+  // Funzione per disegnare il razzo nella vista frontale
+  function drawRocketFrontView(ctx: CanvasRenderingContext2D, rocketWidth: number, pitchRad: number) {
+    // Nella vista frontale, vediamo solo la sezione circolare del razzo
+    const radius = rocketWidth / 2;
     
-    // Restaura lo stato del canvas
+    // Applica pitch per vedere l'effetto anche nella vista frontale
+    ctx.save();
+    // Se il pitch è positivo, il razzo punta leggermente verso l'osservatore
+    // Se il pitch è negativo, il razzo punta leggermente lontano dall'osservatore
+    // Questo si traduce in una leggera ellissi
+    const pitchEffect = Math.cos(pitchRad);
+    
+    // Disegna il corpo del razzo visto frontalmente
+    ctx.fillStyle = '#e0e0e0';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, radius, radius * pitchEffect, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    
+    // Disegna le alette come viste frontalmente
+    // Aletta superiore (magenta)
+    ctx.fillStyle = '#ff44ff';
+    ctx.beginPath();
+    ctx.moveTo(0, -radius);
+    ctx.lineTo(-radius/2, -radius*1.5);
+    ctx.lineTo(radius/2, -radius*1.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Aletta inferiore (verde)
+    ctx.fillStyle = '#44ff44';
+    ctx.beginPath();
+    ctx.moveTo(0, radius);
+    ctx.lineTo(-radius/2, radius*1.5);
+    ctx.lineTo(radius/2, radius*1.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Alette laterali (blu)
+    ctx.fillStyle = '#4444ff';
+    ctx.beginPath();
+    ctx.moveTo(-radius, 0);
+    ctx.lineTo(-radius*1.5, -radius/2);
+    ctx.lineTo(-radius*1.5, radius/2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    ctx.beginPath();
+    ctx.moveTo(radius, 0);
+    ctx.lineTo(radius*1.5, -radius/2);
+    ctx.lineTo(radius*1.5, radius/2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Linea indicatrice verticale per orientamento
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, -radius*1.8);
+    ctx.lineTo(0, radius*1.8);
+    ctx.stroke();
+    
+    // Linea indicatrice orizzontale per orientamento
+    ctx.beginPath();
+    ctx.moveTo(-radius*1.8, 0);
+    ctx.lineTo(radius*1.8, 0);
+    ctx.stroke();
+    
     ctx.restore();
-    
-    // Disegna i vettori di accelerazione
-    const accelScale = 50;
+  }
+  
+  // Funzione per disegnare i vettori di accelerazione
+  function drawAccelerationVectors(
+    ctx: CanvasRenderingContext2D, 
+    centerX: number, 
+    centerY: number, 
+    currentPoint: SensorDataPoint, 
+    accelScale: number
+  ) {
+    ctx.save();
+    ctx.translate(centerX, centerY);
     
     // Vettore X (rosso)
     const accelX = currentPoint.accelX * accelScale;
@@ -589,22 +832,17 @@ const TelemetryVisualization: React.FC = () => {
       ctx.fill();
     }
     
-    // Ripristina lo stato del canvas
     ctx.restore();
-    
-    // Disegna la legenda
+  }
+  
+  // Funzione per disegnare la legenda
+  function drawLegend(ctx: CanvasRenderingContext2D, width: number, height: number) {
     ctx.font = '14px Arial';
     ctx.fillStyle = '#000';
     ctx.fillText('Orientamento del Razzo', width - 170, 20);
     
     const legendY = 40;
     const legendSpacing = 20;
-    
-    // Aggiungi alla legenda un indicatore di orientamento
-    ctx.fillStyle = '#ff8800';
-    ctx.fillRect(width - 170, legendY + legendSpacing * 4, 15, 15);
-    ctx.fillStyle = '#000';
-    ctx.fillText('Direzione (Yaw)', width - 150, legendY + legendSpacing * 4 + 12);
     
     ctx.fillStyle = '#ff0000';
     ctx.fillRect(width - 170, legendY, 15, 15);
@@ -625,101 +863,6 @@ const TelemetryVisualization: React.FC = () => {
     ctx.fillRect(width - 170, legendY + legendSpacing * 3, 15, 15);
     ctx.fillStyle = '#000';
     ctx.fillText('Accel Totale', width - 150, legendY + legendSpacing * 3 + 12);
-    
-  }, [currentPoint, filter, rocketLength, rocketWidth]);
-
-  // Funzione di supporto per disegnare il razzo
-  function drawRocket(ctx: CanvasRenderingContext2D, rocketWidth: number, rocketLength: number, roll: number, pitch: number) {
-    // Applica le rotazioni per pitch e roll
-    ctx.rotate(Math.PI + pitch); // Punta verso l'alto + pitch
-    ctx.rotate(roll);            // Roll
-    
-    // Disegna il corpo del razzo
-    ctx.fillStyle = '#d0d0d0';
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.rect(-rocketWidth / 2, -rocketLength / 2, rocketWidth, rocketLength);
-    ctx.fill();
-    ctx.stroke();
-    
-    // Disegna la punta del razzo
-    ctx.fillStyle = '#ff4444';
-    ctx.beginPath();
-    ctx.moveTo(-rocketWidth / 2, -rocketLength / 2);
-    ctx.lineTo(0, -rocketLength / 2 - 20);
-    ctx.lineTo(rocketWidth / 2, -rocketLength / 2);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    
-    // Disegna un indicatore di orientamento visibile dall'alto
-    ctx.fillStyle = '#ff8800';
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 1;
-    
-    // Disegna la base dell'indicatore
-    ctx.beginPath();
-    ctx.arc(0, -rocketLength / 2 - 10, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    
-    // Disegna una freccia che punta in avanti
-    ctx.beginPath();
-    ctx.moveTo(0, -rocketLength / 2 - 18);  // Punta della freccia
-    ctx.lineTo(-5, -rocketLength / 2 - 10); // Lato sinistro
-    ctx.lineTo(5, -rocketLength / 2 - 10);  // Lato destro
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    
-    // Disegna un punto di riferimento di colore contrastante sulla punta
-    ctx.fillStyle = '#ff00ff';
-    ctx.beginPath();
-    ctx.arc(0, -rocketLength / 2 - 25, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    
-    // Disegna le alette con colori più visibili per distinguere l'orientamento
-    // Aletta 1 (sinistra)
-    ctx.fillStyle = '#4444ff';
-    ctx.beginPath();
-    ctx.moveTo(-rocketWidth / 2, rocketLength / 2);
-    ctx.lineTo(-rocketWidth / 2 - 15, rocketLength / 2 + 20);
-    ctx.lineTo(-rocketWidth / 2, rocketLength / 2 - 10);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    
-    // Aletta 2 (destra)
-    ctx.fillStyle = '#4444ff';
-    ctx.beginPath();
-    ctx.moveTo(rocketWidth / 2, rocketLength / 2);
-    ctx.lineTo(rocketWidth / 2 + 15, rocketLength / 2 + 20);
-    ctx.lineTo(rocketWidth / 2, rocketLength / 2 - 10);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    
-    // Aletta 3 (posteriore - in diverso colore per distinguere meglio la rotazione yaw)
-    ctx.fillStyle = '#44ff44';
-    ctx.beginPath();
-    ctx.moveTo(0, rocketLength / 2);
-    ctx.lineTo(0, rocketLength / 2 + 20);
-    ctx.lineTo(10, rocketLength / 2 - 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    
-    // Aletta 4 (anteriore - in diverso colore per distinguere meglio la rotazione yaw)
-    ctx.fillStyle = '#ff44ff';
-    ctx.beginPath();
-    ctx.moveTo(0, rocketLength / 2);
-    ctx.lineTo(0, rocketLength / 2 + 20);
-    ctx.lineTo(-10, rocketLength / 2 - 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
   }
 
   

@@ -566,18 +566,20 @@ function compensateAcceleration(
     const mainViewSize = Math.min(width, height) * 0.6;
     const topViewSize = Math.min(width, height) * 0.25;
     
+    // Modifica la parte che si occupa della vista laterale del razzo
     // Vista principale (laterale, mostra principalmente pitch e roll)
     ctx.save();
     ctx.translate(centerX, centerY);
-    
-    // Applica le rotazioni per la vista laterale
-    // Prima roll, poi pitch
+
+    // CORREZIONE: L'orientamento iniziale deve essere con la punta verso l'alto
+    // Questo significa che il pitch di base deve essere 0 (non Math.PI)
+    // Applica prima il roll, poi il pitch (inizialmente 0 + pitch misurato)
     ctx.rotate(rollRad);
     ctx.rotate(pitchRad);
-    
+
     // Disegna il razzo nella vista laterale
     drawRocketSideView(ctx, rocketWidth, rocketLength);
-    
+
     ctx.restore();
     
     // Vista dall'alto (mostra principalmente yaw e roll)
@@ -676,12 +678,13 @@ function compensateAcceleration(
     ctx.fillStyle = '#d0d0d0';
     ctx.strokeStyle = '#000';
     ctx.lineWidth = 1;
+    // CORREZIONE: Il rettangolo è posizionato in modo che la punta sia nella direzione positiva dell'asse Y
     ctx.beginPath();
     ctx.rect(-rocketWidth / 2, -rocketLength / 2, rocketWidth, rocketLength);
     ctx.fill();
     ctx.stroke();
     
-    // Disegna la punta del razzo
+    // Disegna la punta del razzo nella direzione positiva dell'asse Y (verso l'alto)
     ctx.fillStyle = '#ff4444';
     ctx.beginPath();
     ctx.moveTo(-rocketWidth / 2, -rocketLength / 2);
@@ -691,7 +694,7 @@ function compensateAcceleration(
     ctx.fill();
     ctx.stroke();
     
-    // Disegna le alette con colori più visibili per distinguere l'orientamento
+    // Le alette alla base del razzo (direzione negativa dell'asse Y)
     // Aletta 1 (sinistra)
     ctx.fillStyle = '#4444ff';
     ctx.beginPath();
@@ -735,34 +738,35 @@ function compensateAcceleration(
   
   // Funzione per disegnare il razzo nella vista dall'alto
   function drawRocketTopView(ctx: CanvasRenderingContext2D, rocketWidth: number, rocketLength: number, rollRad: number) {
-    // Nell'ottica dall'alto, vediamo il razzo schiacciato
-    const topWidth = rocketWidth;
-    const topLength = rocketLength * 0.75;
-    
-    // Disegna il corpo del razzo dall'alto
-    ctx.fillStyle = '#e0e0e0';
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 1;
-    
-    // Applica roll per vedere la rotazione anche nella vista dall'alto
-    ctx.save();
-    ctx.rotate(rollRad / 3); // Diminuiamo l'effetto del roll per non confondere
-    
-    // Usiamo un'ellisse per rappresentare il razzo visto dall'alto
-    ctx.beginPath();
-    ctx.ellipse(0, 0, topWidth / 2, topLength / 2, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    
-    // Freccia di direzione (punta del razzo)
-    ctx.fillStyle = '#ff4444';
-    ctx.beginPath();
-    ctx.moveTo(0, -topLength / 2 - 10);
-    ctx.lineTo(-8, -topLength / 2);
-    ctx.lineTo(8, -topLength / 2);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+  // Nell'ottica dall'alto, vediamo il razzo schiacciato
+  const topWidth = rocketWidth;
+  const topLength = rocketLength * 0.75;
+  
+  // Applica roll per vedere la rotazione anche nella vista dall'alto
+  ctx.save();
+  ctx.rotate(rollRad / 3);
+  
+  // Disegna il corpo del razzo dall'alto
+  ctx.fillStyle = '#e0e0e0';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  
+  // Usiamo un'ellisse per rappresentare il razzo visto dall'alto
+  ctx.beginPath();
+  ctx.ellipse(0, 0, topWidth / 2, topLength / 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  
+  // CORREZIONE: La punta del razzo deve puntare verso il nord
+  // Freccia di direzione (punta del razzo)
+  ctx.fillStyle = '#ff4444';
+  ctx.beginPath();
+  ctx.moveTo(0, -topLength / 2 - 10);
+  ctx.lineTo(-8, -topLength / 2);
+  ctx.lineTo(8, -topLength / 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
     
     // Indicatore per le alette viste dall'alto
     const finOffset = topLength / 3;

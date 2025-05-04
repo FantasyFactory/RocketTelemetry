@@ -117,7 +117,7 @@ const applyImprovedComplementaryFilter = (data: SensorDataPoint[], alpha = 0.98)
   
   // Distanza del sensore dal centro di massa (in metri)
   // Questo valore dovrebbe essere calibrato in base al razzo specifico
-  const distanceFromCM = 0.15; // 15 cm di esempio, regolare in base al razzo reale
+  const distanceFromCM = 0.30; // 30 cm di esempio, regolare in base al razzo reale
   
   // Vettore di posizione del sensore rispetto al CM nel sistema di coordinate del corpo (razzo)
   // Assumendo che il sensore sia posizionato sull'asse longitudinale del razzo, verso la punta
@@ -486,6 +486,23 @@ function compensateAcceleration(
       setIsLoading(false);
     }
   };
+
+    // Funzione per caricare il file predefinito
+    const loadGoldenSlumbers1 = async (): Promise<void> => {
+      try {
+        setIsLoading(true);
+        // Utilizziamo fetch invece di window.fs.readFile
+        const response = await fetch('/GoldenSlumbers1.txt');
+        if (!response.ok) {
+          throw new Error(`Errore nel caricamento del file: ${response.status}`);
+        }
+        const fileContent = await response.text();
+        processData(fileContent);
+      } catch (error) {
+        console.error('Errore nel caricamento del file predefinito:', error);
+        setIsLoading(false);
+      }
+    };
   
   // Funzione per processare i dati CSV
   const processData = (fileContent: string): void => {
@@ -513,6 +530,29 @@ function compensateAcceleration(
     parsedData.forEach(row => {
       row.relativeTime = (row.timestamp - startTime) / 1000; // in secondi
     });
+    
+    // CORREZIONE 1: Verifica dell'orientamento dell'accelerometro
+    // Verifichiamo se l'accelerometro ha Z invertito (tipico in alcuni sensori IMU)
+    // Utilizziamo le prime 20 misurazioni (o meno se non disponibili)
+    const samplesToCheck = Math.min(20, parsedData.length);
+    let avgAccelZ = 0;
+    
+    for (let i = 0; i < samplesToCheck; i++) {
+      avgAccelZ += parsedData[i].accelZ;
+    }
+    avgAccelZ /= samplesToCheck;
+    
+    // Se l'asse Z medio è positivo, molto probabilmente è invertito
+    // (in condizioni normali a riposo, Z dovrebbe essere circa -1g)
+    const needsZInversion = avgAccelZ > 0;
+    
+    if (needsZInversion) {
+      console.log("Rilevato accelerometro con asse Z invertito, normalizzazione in corso...");
+      // Invertiamo l'asse Z per tutti i punti
+      parsedData.forEach(point => {
+        point.accelZ = -point.accelZ;
+      });
+    }
     
     setData(parsedData);
     
@@ -738,36 +778,36 @@ function compensateAcceleration(
   
   // Funzione per disegnare il razzo nella vista dall'alto
   function drawRocketTopView(ctx: CanvasRenderingContext2D, rocketWidth: number, rocketLength: number, rollRad: number) {
-  // Nell'ottica dall'alto, vediamo il razzo schiacciato
-  const topWidth = rocketWidth;
-  const topLength = rocketLength * 0.75;
-  
-  // Applica roll per vedere la rotazione anche nella vista dall'alto
-  ctx.save();
-  ctx.rotate(rollRad / 3);
-  
-  // Disegna il corpo del razzo dall'alto
-  ctx.fillStyle = '#e0e0e0';
-  ctx.strokeStyle = '#000';
-  ctx.lineWidth = 1;
-  
-  // Usiamo un'ellisse per rappresentare il razzo visto dall'alto
-  ctx.beginPath();
-  ctx.ellipse(0, 0, topWidth / 2, topLength / 2, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-  
-  // CORREZIONE: La punta del razzo deve puntare verso il nord
-  // Freccia di direzione (punta del razzo)
-  ctx.fillStyle = '#ff4444';
-  ctx.beginPath();
-  ctx.moveTo(0, -topLength / 2 - 10);
-  ctx.lineTo(-8, -topLength / 2);
-  ctx.lineTo(8, -topLength / 2);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
+    // Nell'ottica dall'alto, vediamo il razzo schiacciato
+    const topWidth = rocketWidth;
+    const topLength = rocketLength * 0.75;
     
+    // Applica roll per vedere la rotazione anche nella vista dall'alto
+    ctx.save();
+    ctx.rotate(rollRad / 3);
+    
+    // Disegna il corpo del razzo dall'alto
+    ctx.fillStyle = '#e0e0e0';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    
+    // Usiamo un'ellisse per rappresentare il razzo visto dall'alto
+    ctx.beginPath();
+    ctx.ellipse(0, 0, topWidth / 2, topLength / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    
+    // CORREZIONE: La punta del razzo deve puntare verso il nord
+    // Freccia di direzione (punta del razzo)
+    ctx.fillStyle = '#ff4444';
+    ctx.beginPath();
+    ctx.moveTo(0, -topLength / 2 - 10);
+    ctx.lineTo(-8, -topLength / 2);
+    ctx.lineTo(8, -topLength / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+      
     // Indicatore per le alette viste dall'alto
     const finOffset = topLength / 3;
     
@@ -814,10 +854,11 @@ function compensateAcceleration(
     
     // Applica pitch per vedere l'effetto anche nella vista frontale
     ctx.save();
+    // CORREZIONE 2: Assicuriamoci che pitchEffect sia sempre positivo
     // Se il pitch è positivo, il razzo punta leggermente verso l'osservatore
     // Se il pitch è negativo, il razzo punta leggermente lontano dall'osservatore
     // Questo si traduce in una leggera ellissi
-    const pitchEffect = Math.cos(pitchRad);
+    const pitchEffect = Math.abs(Math.cos(pitchRad)); // Aggiungiamo Math.abs() per evitare valori negativi
     
     // Disegna il corpo del razzo visto frontalmente
     ctx.fillStyle = '#e0e0e0';
@@ -1114,6 +1155,14 @@ function compensateAcceleration(
           disabled={isRealtime}
         >
           Carica File Predefinito
+        </button>
+
+        <button 
+          onClick={loadGoldenSlumbers1}
+          className="px-4 py-1 bg-blue-500 text-white rounded hover:bg-blue-600"
+          disabled={isRealtime}
+        >
+          Golden Slumbers 1
         </button>
         
         <div className="flex items-center mx-2">

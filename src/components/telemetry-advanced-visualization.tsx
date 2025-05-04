@@ -7,6 +7,7 @@ const degToRad = (degrees) => {
 };
 
 // Implementazione del filtro complementare per la fusione dei dati
+// Modificata la funzione per gestire i casi in cui i dati provengono dalla modalità real-time
 const applyComplementaryFilter = (data, alpha = 0.98) => {
   if (!data || data.length === 0) return [];
   
@@ -25,6 +26,13 @@ const applyComplementaryFilter = (data, alpha = 0.98) => {
   // Calcola il dt (intervallo di tempo) tra campioni consecutivi
   const calculateDt = (current, previous) => {
     if (!previous) return 0.1; // Default a 100ms se non c'è un punto precedente
+    
+    // Utilizziamo il timestamp relativo per calcolare dt
+    if (current.relativeTime !== undefined && previous.relativeTime !== undefined) {
+      return current.relativeTime - previous.relativeTime;
+    }
+    
+    // Fallback al timestamp del sistema
     return (current.timestamp - previous.timestamp) / 1000; // Converti in secondi
   };
   
@@ -39,9 +47,16 @@ const applyComplementaryFilter = (data, alpha = 0.98) => {
     
     // Integrazione del giroscopio
     if (i > 0) {
-      roll = alpha * (roll + point.gyroX * dt) + (1 - alpha) * accelRoll;
-      pitch = alpha * (pitch + point.gyroY * dt) + (1 - alpha) * accelPitch;
-      yaw = (yaw + point.gyroZ * dt); // Il giroscopio è l'unica fonte per lo yaw
+      // Limita dt a un valore massimo ragionevole per evitare salti eccessivi
+      const limitedDt = Math.min(dt, 0.5);
+      
+      roll = alpha * (roll + point.gyroX * limitedDt) + (1 - alpha) * accelRoll;
+      pitch = alpha * (pitch + point.gyroY * limitedDt) + (1 - alpha) * accelPitch;
+      yaw = (yaw + point.gyroZ * limitedDt); // Il giroscopio è l'unica fonte per lo yaw
+      
+      // Mantieni yaw nel range -180 a 180
+      while (yaw > 180) yaw -= 360;
+      while (yaw < -180) yaw += 360;
     }
     
     // Salvataggio degli angoli filtrati
@@ -53,6 +68,30 @@ const applyComplementaryFilter = (data, alpha = 0.98) => {
   return result;
 };
 
+// Funzione per aggiornare dinamicamente il grafico con nuovi dati in tempo reale
+const updateChartWithRealtimeData = (newPoint) => {
+  // Aggiungi il nuovo punto ai dati esistenti
+  setData(prevData => {
+    // Se siamo in modalità real-time, manteniamo solo gli ultimi N punti per prestazioni migliori
+    const maxPoints = 300; // Ad esempio, 30 secondi di dati a 10Hz
+    const newData = [...prevData, newPoint];
+    if (newData.length > maxPoints) {
+      return newData.slice(newData.length - maxPoints);
+    }
+    return newData;
+  });
+  
+  // Applicare il filtro e aggiornare i dati filtrati
+  setFilteredData(prevFiltered => {
+    const updatedData = [...prevFiltered, newPoint];
+    const maxPoints = 300;
+    if (updatedData.length > maxPoints) {
+      return applyComplementaryFilter(updatedData.slice(updatedData.length - maxPoints));
+    }
+    return applyComplementaryFilter(updatedData);
+  });
+};
+
 const TelemetryVisualization = () => {
   const [data, setData] = useState([]);
   const [filteredData, setFilteredData] = useState([]);
@@ -61,6 +100,103 @@ const TelemetryVisualization = () => {
   const [currentPoint, setCurrentPoint] = useState(null);
   const canvasRef = useRef(null);
   const [filter, setFilter] = useState(true);
+  const [isRealtime, setIsRealtime] = useState(false);
+  const [realtimeInterval, setRealtimeInterval] = useState(null);
+  const [firstFetchTimestamp, setFirstFetchTimestamp] = useState(0);
+
+  // Aggiungi queste variabili di stato nella sezione degli useState
+const [isRealtime, setIsRealtime] = useState(false);
+const [realtimeInterval, setRealtimeInterval] = useState(null);
+
+// Funzione per il fetch dei dati in tempo reale
+const fetchRealtimeData = async () => {
+  try {
+    const response = await fetch('http://192.168.4.1/imudata');
+    if (!response.ok) {
+      throw new Error(`Errore nella richiesta: ${response.status}`);
+    }
+    
+    const jsonData = await response.json();
+    
+    // Timestamp attuale in millisecondi
+    const currentTimestamp = Date.now();
+    
+    // Crea un nuovo punto dati
+    const newDataPoint = {
+      timestamp: jsonData.system.millis,
+      relativeTime: (currentTimestamp - firstFetchTimestamp) / 1000, // in secondi
+      accelX: jsonData.sensors.accel.x,
+      accelY: jsonData.sensors.accel.y,
+      accelZ: jsonData.sensors.accel.z,
+      gyroX: jsonData.sensors.gyro.x,
+      gyroY: jsonData.sensors.gyro.y,
+      gyroZ: jsonData.sensors.gyro.z,
+      // Se l'altitudine è presente nei dati, la utilizziamo, altrimenti impostiamo un valore predefinito
+      altitude: jsonData.sensors.altitude !== undefined ? jsonData.sensors.altitude : 0
+    };
+    
+    // Aggiungiamo il nuovo punto ai dati esistenti
+    setData(prevData => {
+      const newData = [...prevData, newDataPoint];
+      // Se ci sono troppi punti, rimuoviamo quelli più vecchi
+      if (newData.length > 1000) {
+        return newData.slice(newData.length - 1000);
+      }
+      return newData;
+    });
+    
+    // Applichiamo il filtro di fusione
+    const updatedData = [...filteredData, newDataPoint];
+    const filteredResult = applyComplementaryFilter(updatedData);
+    setFilteredData(filteredResult);
+    
+    // Aggiorniamo il punto corrente
+    setCurrentPoint(filteredResult[filteredResult.length - 1]);
+    
+  } catch (error) {
+    console.error('Errore nel recupero dei dati in tempo reale:', error);
+    // In caso di errore, disattiviamo la modalità real-time
+    stopRealtimeData();
+  }
+};
+
+// Funzione per avviare il recupero dei dati in tempo reale
+const startRealtimeData = () => {
+  if (isRealtime) return; // Se è già attivo, non facciamo nulla
+  
+  // Memorizziamo il timestamp del primo fetch
+  setFirstFetchTimestamp(Date.now());
+  
+  // Puliamo i dati esistenti
+  setData([]);
+  setFilteredData([]);
+  
+  // Avviamo il polling ad intervalli regolari (ogni 100ms)
+  const interval = setInterval(fetchRealtimeData, 100);
+  setRealtimeInterval(interval);
+  setIsRealtime(true);
+};
+
+// Funzione per fermare il recupero dei dati in tempo reale
+const stopRealtimeData = () => {
+  if (realtimeInterval) {
+    clearInterval(realtimeInterval);
+    setRealtimeInterval(null);
+  }
+  setIsRealtime(false);
+};
+
+// Pulizia dell'intervallo quando il componente viene smontato
+useEffect(() => {
+  return () => {
+    if (realtimeInterval) {
+      clearInterval(realtimeInterval);
+    }
+  };
+}, [realtimeInterval]);
+
+// Aggiungi questa variabile di stato
+const [firstFetchTimestamp, setFirstFetchTimestamp] = useState(0);
   
   // Funzione per caricare un file selezionato dall'utente
   const handleFileSelect = async (event) => {
@@ -140,132 +276,143 @@ const TelemetryVisualization = () => {
     loadDefaultFile();
   }, []);
   
-  // Funzione per disegnare la visualizzazione 3D dell'orientamento
-  useEffect(() => {
-    if (!currentPoint || !canvasRef.current) return;
-    
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
-    
-    // Pulisci il canvas
-    ctx.clearRect(0, 0, width, height);
-    
-    // Centro del canvas
-    const centerX = width / 2;
-    const centerY = height / 2;
-    
-    // Converte gli angoli in radianti
-    const roll = filter ? degToRad(currentPoint.roll) : 0;
-    const pitch = filter ? degToRad(currentPoint.pitch) : 0;
-    const yaw = filter ? degToRad(currentPoint.yaw) : 0;
-    
-    // Disegna il razzo (un rettangolo ruotato)
-    const rocketLength = 80;
-    const rocketWidth = 20;
-    
-    // Disegna gli assi di riferimento
-    const axisLength = 40;
-    ctx.lineWidth = 1;
-    
-    // Asse X (rosso)
-    ctx.strokeStyle = '#ff0000';
-    ctx.beginPath();
-    ctx.moveTo(10, height - 10);
-    ctx.lineTo(10 + axisLength, height - 10);
-    ctx.stroke();
-    ctx.fillStyle = '#ff0000';
-    ctx.fillText('X', 10 + axisLength + 5, height - 7);
-    
-    // Asse Y (verde)
-    ctx.strokeStyle = '#00ff00';
-    ctx.beginPath();
-    ctx.moveTo(10, height - 10);
-    ctx.lineTo(10, height - 10 - axisLength);
-    ctx.stroke();
-    ctx.fillStyle = '#00ff00';
-    ctx.fillText('Y', 10, height - 10 - axisLength - 5);
-    
-    // Asse Z (blu)
-    ctx.strokeStyle = '#0000ff';
-    ctx.beginPath();
-    ctx.moveTo(10, height - 10);
-    ctx.lineTo(10 + axisLength * 0.7, height - 10 - axisLength * 0.7);
-    ctx.stroke();
-    ctx.fillStyle = '#0000ff';
-    ctx.fillText('Z', 10 + axisLength * 0.7 + 5, height - 10 - axisLength * 0.7 - 5);
-    
-    ctx.save();
-    ctx.translate(centerX, centerY);
-    
-    // Ruota di 180 gradi in pitch per mettere la punta del razzo verso l'alto inizialmente
-    const initialPitch = Math.PI;
-    
-    // Applicazione delle rotazioni (nell'ordine corretto: yaw, pitch, roll)
-    ctx.rotate(yaw);  // Prima il yaw (rotazione attorno all'asse verticale)
-    ctx.rotate(pitch + initialPitch);  // Poi il pitch (rotazione avanti/indietro)
-    ctx.rotate(roll);  // Infine il roll (rotazione laterale)
-    
-    // Disegna il corpo del razzo
-    ctx.fillStyle = '#d0d0d0';
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.rect(-rocketWidth / 2, -rocketLength / 2, rocketWidth, rocketLength);
-    ctx.fill();
-    ctx.stroke();
-    
-    // Disegna la punta del razzo (ora correttamente verso l'alto)
-    ctx.fillStyle = '#ff4444';
-    ctx.beginPath();
-    ctx.moveTo(-rocketWidth / 2, -rocketLength / 2);
-    ctx.lineTo(0, -rocketLength / 2 - 20);
-    ctx.lineTo(rocketWidth / 2, -rocketLength / 2);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    
-    // Disegna le alette
-    ctx.fillStyle = '#4444ff';
-    
-    // Aletta 1
-    ctx.beginPath();
-    ctx.moveTo(-rocketWidth / 2, rocketLength / 2);
-    ctx.lineTo(-rocketWidth / 2 - 15, rocketLength / 2 + 20);
-    ctx.lineTo(-rocketWidth / 2, rocketLength / 2 - 10);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    
-    // Aletta 2
-    ctx.beginPath();
-    ctx.moveTo(rocketWidth / 2, rocketLength / 2);
-    ctx.lineTo(rocketWidth / 2 + 15, rocketLength / 2 + 20);
-    ctx.lineTo(rocketWidth / 2, rocketLength / 2 - 10);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    
-    // Aletta 3 (per renderle visibili in 3D)
-    ctx.beginPath();
-    ctx.moveTo(0, rocketLength / 2);
-    ctx.lineTo(0, rocketLength / 2 + 20);
-    ctx.lineTo(10, rocketLength / 2 - 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    
-    // Aletta 4 (per renderle visibili in 3D)
-    ctx.beginPath();
-    ctx.moveTo(0, rocketLength / 2);
-    ctx.lineTo(0, rocketLength / 2 + 20);
-    ctx.lineTo(-10, rocketLength / 2 - 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    
-    // Disegna i vettori di accelerazione
+// This is the updated code for the 3D visualization function in useEffect
+useEffect(() => {
+  if (!currentPoint || !canvasRef.current) return;
+  
+  const canvas = canvasRef.current;
+  const ctx = canvas.getContext('2d');
+  const width = canvas.width;
+  const height = canvas.height;
+  
+  // Pulisci il canvas
+  ctx.clearRect(0, 0, width, height);
+  
+  // Centro del canvas
+  const centerX = width / 2;
+  const centerY = height / 2;
+  
+  // Converte gli angoli in radianti
+  const roll = filter ? degToRad(currentPoint.roll) : 0;
+  const pitch = filter ? degToRad(currentPoint.pitch) : 0;
+  const yaw = filter ? degToRad(currentPoint.yaw) : 0;
+  
+  // Disegna gli assi di riferimento
+  const axisLength = 40;
+  ctx.lineWidth = 1;
+  
+  // Asse X (rosso)
+  ctx.strokeStyle = '#ff0000';
+  ctx.beginPath();
+  ctx.moveTo(10, height - 10);
+  ctx.lineTo(10 + axisLength, height - 10);
+  ctx.stroke();
+  ctx.fillStyle = '#ff0000';
+  ctx.fillText('X', 10 + axisLength + 5, height - 7);
+  
+  // Asse Y (verde)
+  ctx.strokeStyle = '#00ff00';
+  ctx.beginPath();
+  ctx.moveTo(10, height - 10);
+  ctx.lineTo(10, height - 10 - axisLength);
+  ctx.stroke();
+  ctx.fillStyle = '#00ff00';
+  ctx.fillText('Y', 10, height - 10 - axisLength - 5);
+  
+  // Asse Z (blu)
+  ctx.strokeStyle = '#0000ff';
+  ctx.beginPath();
+  ctx.moveTo(10, height - 10);
+  ctx.lineTo(10 + axisLength * 0.7, height - 10 - axisLength * 0.7);
+  ctx.stroke();
+  ctx.fillStyle = '#0000ff';
+  ctx.fillText('Z', 10 + axisLength * 0.7 + 5, height - 10 - axisLength * 0.7 - 5);
+  
+  ctx.save();
+  ctx.translate(centerX, centerY);
+  
+  // Ruota di 180 gradi in pitch per mettere la punta del razzo verso l'alto inizialmente
+  const initialPitch = Math.PI;
+  
+  // CORREZIONE: Applicazione delle rotazioni con ordine corretto per visualizzare meglio lo yaw
+  // Primo passo: rotazione per lo yaw (attorno all'asse Z)
+  ctx.rotate(yaw);
+  
+  // Secondo passo: rotazione per il pitch (attorno all'asse Y)
+  ctx.rotate(pitch + initialPitch);
+  
+  // Terzo passo: rotazione per il roll (attorno all'asse X)
+  ctx.rotate(roll);
+  
+  // Disegna il corpo del razzo
+  ctx.fillStyle = '#d0d0d0';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.rect(-rocketWidth / 2, -rocketLength / 2, rocketWidth, rocketLength);
+  ctx.fill();
+  ctx.stroke();
+  
+  // Disegna la punta del razzo
+  ctx.fillStyle = '#ff4444';
+  ctx.beginPath();
+  ctx.moveTo(-rocketWidth / 2, -rocketLength / 2);
+  ctx.lineTo(0, -rocketLength / 2 - 20);
+  ctx.lineTo(rocketWidth / 2, -rocketLength / 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  
+  // Disegna le alette con colori più visibili per distinguere l'orientamento
+  
+  // Aletta 1 (sinistra)
+  ctx.fillStyle = '#4444ff';
+  ctx.beginPath();
+  ctx.moveTo(-rocketWidth / 2, rocketLength / 2);
+  ctx.lineTo(-rocketWidth / 2 - 15, rocketLength / 2 + 20);
+  ctx.lineTo(-rocketWidth / 2, rocketLength / 2 - 10);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  
+  // Aletta 2 (destra)
+  ctx.fillStyle = '#4444ff';
+  ctx.beginPath();
+  ctx.moveTo(rocketWidth / 2, rocketLength / 2);
+  ctx.lineTo(rocketWidth / 2 + 15, rocketLength / 2 + 20);
+  ctx.lineTo(rocketWidth / 2, rocketLength / 2 - 10);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  
+  // Aletta 3 (posteriore - in diverso colore per distinguere meglio la rotazione yaw)
+  ctx.fillStyle = '#44ff44';
+  ctx.beginPath();
+  ctx.moveTo(0, rocketLength / 2);
+  ctx.lineTo(0, rocketLength / 2 + 20);
+  ctx.lineTo(10, rocketLength / 2 - 5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  
+  // Aletta 4 (anteriore - in diverso colore per distinguere meglio la rotazione yaw)
+  ctx.fillStyle = '#ff44ff';
+  ctx.beginPath();
+  ctx.moveTo(0, rocketLength / 2);
+  ctx.lineTo(0, rocketLength / 2 + 20);
+  ctx.lineTo(-10, rocketLength / 2 - 5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  
+  // Aggiungi un indicatore di direzione per visualizzare meglio lo yaw
+  ctx.fillStyle = '#ff8800';
+  ctx.beginPath();
+  ctx.arc(0, -rocketLength / 2 - 10, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+    // Disegna i vettori di accelerazione come prima...
     if (currentPoint) {
       const accelScale = 50; // Scala per il vettore di accelerazione
       
@@ -380,7 +527,7 @@ const TelemetryVisualization = () => {
     }
     
     ctx.restore();
-    
+  
     // Disegna la legenda
     ctx.font = '14px Arial';
     ctx.fillStyle = '#000';
@@ -388,6 +535,12 @@ const TelemetryVisualization = () => {
     
     const legendY = 40;
     const legendSpacing = 20;
+    
+    // Aggiungi alla legenda un indicatore di orientamento
+    ctx.fillStyle = '#ff8800';
+    ctx.fillRect(width - 170, legendY + legendSpacing * 4, 15, 15);
+    ctx.fillStyle = '#000';
+    ctx.fillText('Direzione (Yaw)', width - 150, legendY + legendSpacing * 4 + 12);
     
     ctx.fillStyle = '#ff0000';
     ctx.fillRect(width - 170, legendY, 15, 15);
@@ -477,17 +630,19 @@ const TelemetryVisualization = () => {
             accept=".csv,.txt"
             onChange={handleFileSelect}
             className="border p-1 rounded"
+            disabled={isRealtime}
           />
         </div>
         
         <button 
           onClick={loadDefaultFile}
           className="px-4 py-1 bg-blue-500 text-white rounded hover:bg-blue-600"
+          disabled={isRealtime}
         >
           Carica File Predefinito
         </button>
         
-        <div className="flex items-center ml-auto">
+        <div className="flex items-center mx-2">
           <label htmlFor="filterToggle" className="mr-2">Filtro di Fusione:</label>
           <input
             type="checkbox"
@@ -497,7 +652,35 @@ const TelemetryVisualization = () => {
             className="w-4 h-4"
           />
         </div>
+        
+        {/* Aggiungi i pulsanti per il controllo real-time */}
+        <div className="ml-auto flex gap-2">
+          <button 
+            onClick={startRealtimeData}
+            disabled={isRealtime}
+            className={`px-4 py-1 rounded ${isRealtime ? 'bg-gray-400' : 'bg-green-500 text-white hover:bg-green-600'}`}
+          >
+            REALTIME ON
+          </button>
+          <button 
+            onClick={stopRealtimeData}
+            disabled={!isRealtime}
+            className={`px-4 py-1 rounded ${!isRealtime ? 'bg-gray-400' : 'bg-red-500 text-white hover:bg-red-600'}`}
+          >
+            REALTIME OFF
+          </button>
+        </div>
       </div>
+
+      {/* indicatore di stato real-time */}
+      {isRealtime && (
+        <div className="mb-4 p-2 bg-green-100 border border-green-300 rounded text-center">
+          <p className="font-semibold flex items-center justify-center">
+            <span className="inline-block w-3 h-3 bg-green-500 rounded-full mr-2 animate-pulse"></span>
+            Modalità Real-time Attiva - Connesso a 192.168.4.1
+          </p>
+        </div>
+      )}
       
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
         {/* Grafico */}

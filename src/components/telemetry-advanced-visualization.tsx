@@ -15,6 +15,9 @@ interface SensorDataPoint {
   roll?: number;
   pitch?: number;
   yaw?: number;
+  compAccelX?: number;
+  compAccelY?: number;
+  compAccelZ?: number;
 }
 
 interface ApiResponse {
@@ -102,7 +105,172 @@ const applyComplementaryFilter = (data: SensorDataPoint[], alpha = 0.98): Sensor
   return result;
 };
 
-const TelemetryVisualization: React.FC = () => {
+// Implementazione migliorata del filtro complementare per la fusione dei dati
+// con compensazione della posizione del sensore rispetto al centro di massa
+const applyImprovedComplementaryFilter = (data: SensorDataPoint[], alpha = 0.98): SensorDataPoint[] => {
+  if (!data || data.length === 0) return [];
+  
+  const result = [...data];
+  let roll = 0;
+  let pitch = 0;
+  let yaw = 0;
+  
+  // Distanza del sensore dal centro di massa (in metri)
+  // Questo valore dovrebbe essere calibrato in base al razzo specifico
+  const distanceFromCM = 0.15; // 15 cm di esempio, regolare in base al razzo reale
+  
+  // Vettore di posizione del sensore rispetto al CM nel sistema di coordinate del corpo (razzo)
+  // Assumendo che il sensore sia posizionato sull'asse longitudinale del razzo, verso la punta
+  // [x, y, z] in cui z è lungo l'asse del razzo, positivo verso la punta
+  const sensorPositionVector = [0, 0, distanceFromCM];
+  
+  // Inizializzazione con i primi valori dell'accelerometro
+  const firstPoint = data[0];
+  
+  // Compensiamo le letture iniziali dell'accelerometro per la posizione del sensore
+  // In posizione statica, questo compensa principalmente l'effetto della gravità
+  const initialAccel = compensateAcceleration(
+    firstPoint.accelX, 
+    firstPoint.accelY, 
+    firstPoint.accelZ,
+    0, 0, 0, // velocità angolari iniziali
+    0, 0, 0, // accelerazioni angolari iniziali (sconosciute)
+    sensorPositionVector
+  );
+  
+  // Calcolo iniziale degli angoli usando i valori compensati
+  roll = Math.atan2(initialAccel.y, initialAccel.z) * (180 / Math.PI);
+  pitch = Math.atan2(-initialAccel.x, Math.sqrt(initialAccel.y * initialAccel.y + initialAccel.z * initialAccel.z)) * (180 / Math.PI);
+  
+  // Calcolo del dt e memoria dello stato precedente per le accelerazioni angolari
+  let prevGyroX = firstPoint.gyroX;
+  let prevGyroY = firstPoint.gyroY;
+  let prevGyroZ = firstPoint.gyroZ;
+  
+  // Calcola il dt (intervallo di tempo) tra campioni consecutivi
+  const calculateDt = (current: SensorDataPoint, previous: SensorDataPoint | null): number => {
+    if (!previous) return 0.1; // Default a 100ms se non c'è un punto precedente
+    
+    // Utilizziamo il timestamp relativo per calcolare dt
+    if (current.relativeTime !== undefined && previous.relativeTime !== undefined) {
+      return current.relativeTime - previous.relativeTime;
+    }
+    
+    // Fallback al timestamp del sistema
+    return (current.timestamp - previous.timestamp) / 1000; // Converti in secondi
+  };
+  
+  for (let i = 0; i < result.length; i++) {
+    const point = result[i];
+    const prevPoint = i > 0 ? result[i-1] : null;
+    const dt = calculateDt(point, prevPoint);
+    
+    // Calcolo delle accelerazioni angolari usando le differenze finite
+    // Nota: questo è un calcolo approssimativo, un filtro di Kalman sarebbe più preciso
+    const angAccelX = (point.gyroX - prevGyroX) / dt; // rad/s^2
+    const angAccelY = (point.gyroY - prevGyroY) / dt;
+    const angAccelZ = (point.gyroZ - prevGyroZ) / dt;
+    
+    // Memorizza i valori correnti del giroscopio per il prossimo ciclo
+    prevGyroX = point.gyroX;
+    prevGyroY = point.gyroY;
+    prevGyroZ = point.gyroZ;
+    
+    // Compensazione dell'accelerazione dovuta alla posizione del sensore
+    const compensatedAccel = compensateAcceleration(
+      point.accelX,
+      point.accelY,
+      point.accelZ,
+      point.gyroX, point.gyroY, point.gyroZ, // velocità angolari
+      angAccelX, angAccelY, angAccelZ,       // accelerazioni angolari
+      sensorPositionVector
+    );
+    
+    // Calcolo dell'angolo basato sull'accelerometro compensato
+    const accelRoll = Math.atan2(compensatedAccel.y, compensatedAccel.z) * (180 / Math.PI);
+    const accelPitch = Math.atan2(-compensatedAccel.x, Math.sqrt(compensatedAccel.y * compensatedAccel.y + compensatedAccel.z * compensatedAccel.z)) * (180 / Math.PI);
+    
+    // Integrazione del giroscopio
+    if (i > 0) {
+      // Limita dt a un valore massimo ragionevole per evitare salti eccessivi
+      const limitedDt = Math.min(dt, 0.5);
+      
+      // Applicazione del filtro complementare con le accelerazioni compensate
+      roll = alpha * (roll + point.gyroX * limitedDt) + (1 - alpha) * accelRoll;
+      pitch = alpha * (pitch + point.gyroY * limitedDt) + (1 - alpha) * accelPitch;
+      yaw = (yaw + point.gyroZ * limitedDt); // Il giroscopio è l'unica fonte per lo yaw
+      
+      // Mantieni yaw nel range -180 a 180
+      while (yaw > 180) yaw -= 360;
+      while (yaw < -180) yaw += 360;
+    }
+    
+    // Salvataggio degli angoli filtrati
+    result[i].roll = roll;
+    result[i].pitch = pitch;
+    result[i].yaw = yaw;
+    
+    // Opzionale: salvare anche le accelerazioni compensate per analisi
+    result[i].compAccelX = compensatedAccel.x;
+    result[i].compAccelY = compensatedAccel.y;
+    result[i].compAccelZ = compensatedAccel.z;
+  }
+  
+  return result;
+};
+
+/**
+ * Funzione che compensa le letture dell'accelerometro per la posizione del sensore IMU
+ * relativamente al centro di massa del razzo.
+ * 
+ * Formula di base: a_cm = a_imu - (ω × (ω × r) + α × r)
+ * dove:
+ * - a_cm è l'accelerazione del centro di massa
+ * - a_imu è l'accelerazione misurata dal sensore
+ * - ω è il vettore di velocità angolare (dal giroscopio)
+ * - α è il vettore di accelerazione angolare (derivata di ω)
+ * - r è il vettore di posizione del sensore rispetto al centro di massa
+ * - × rappresenta il prodotto vettoriale
+ */
+function compensateAcceleration(
+  accelX: number, accelY: number, accelZ: number,   // Accelerazioni misurate (m/s^2 o g)
+  gyroX: number, gyroY: number, gyroZ: number,      // Velocità angolari (rad/s)
+  angAccelX: number, angAccelY: number, angAccelZ: number, // Accelerazioni angolari (rad/s^2)
+  sensorPosition: number[]                         // Posizione del sensore rispetto al CM [x,y,z]
+) {
+  const [rx, ry, rz] = sensorPosition;
+  
+  // Calcolo delle accelerazioni centripete: ω × (ω × r)
+  // Prodotto vettoriale ω × r
+  const wxr_x = gyroY * rz - gyroZ * ry;
+  const wxr_y = gyroZ * rx - gyroX * rz;
+  const wxr_z = gyroX * ry - gyroY * rx;
+  
+  // Prodotto vettoriale ω × (ω × r)
+  const centripetal_x = gyroY * wxr_z - gyroZ * wxr_y;
+  const centripetal_y = gyroZ * wxr_x - gyroX * wxr_z;
+  const centripetal_z = gyroX * wxr_y - gyroY * wxr_x;
+  
+  // Calcolo dell'accelerazione tangenziale: α × r
+  const tangential_x = angAccelY * rz - angAccelZ * ry;
+  const tangential_y = angAccelZ * rx - angAccelX * rz;
+  const tangential_z = angAccelX * ry - angAccelY * rx;
+  
+  // Somma delle componenti di accelerazione
+  const totalRotationalEffect_x = centripetal_x + tangential_x;
+  const totalRotationalEffect_y = centripetal_y + tangential_y;
+  const totalRotationalEffect_z = centripetal_z + tangential_z;
+  
+  // Compensazione dell'accelerazione misurata
+  // a_cm = a_imu - effetti rotazionali
+  return {
+    x: accelX - totalRotationalEffect_x,
+    y: accelY - totalRotationalEffect_y,
+    z: accelZ - totalRotationalEffect_z
+  };
+}
+
+  const TelemetryVisualization: React.FC = () => {
   const [data, setData] = useState<SensorDataPoint[]>([]);
   const [filteredData, setFilteredData] = useState<SensorDataPoint[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -211,9 +379,9 @@ const TelemetryVisualization: React.FC = () => {
           const updatedData = [...prevFiltered, newDataPoint];
           const maxPoints = 300;
           if (updatedData.length > maxPoints) {
-            return applyComplementaryFilter(updatedData.slice(updatedData.length - maxPoints));
+            return applyImprovedComplementaryFilter(updatedData.slice(updatedData.length - maxPoints));
           }
-          return applyComplementaryFilter(updatedData);
+          return applyImprovedComplementaryFilter(updatedData);
         });
         
         // Aggiorniamo il punto corrente
@@ -349,7 +517,7 @@ const TelemetryVisualization: React.FC = () => {
     setData(parsedData);
     
     // Applicazione del filtro di fusione
-    const filteredResult = applyComplementaryFilter(parsedData);
+    const filteredResult = applyImprovedComplementaryFilter(parsedData);
     setFilteredData(filteredResult);
     
     // Imposta il punto corrente al primo punto dei dati

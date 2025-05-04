@@ -371,7 +371,7 @@ const TelemetryVisualization: React.FC = () => {
     
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
-    if (!ctx) return; // Assicurati che ctx non sia null
+    if (!ctx) return;
     
     const width = canvas.width;
     const height = canvas.height;
@@ -384,9 +384,9 @@ const TelemetryVisualization: React.FC = () => {
     const centerY = height / 2;
     
     // Converte gli angoli in radianti
-    const roll = filter && currentPoint.roll ? degToRad(currentPoint.roll) : 0;
-    const pitch = filter && currentPoint.pitch ? degToRad(currentPoint.pitch) : 0;
-    const yaw = filter && currentPoint.yaw ? degToRad(currentPoint.yaw) : 0;
+    const rollRad = filter && currentPoint.roll ? degToRad(currentPoint.roll) : 0;
+    const pitchRad = filter && currentPoint.pitch ? degToRad(currentPoint.pitch) : 0;
+    const yawRad = filter && currentPoint.yaw ? degToRad(currentPoint.yaw) : 0;
     
     // Disegna gli assi di riferimento
     const axisLength = 40;
@@ -423,104 +423,59 @@ const TelemetryVisualization: React.FC = () => {
     ctx.save();
     ctx.translate(centerX, centerY);
     
-    // Applica le rotazioni nell'ordine corretto
-    // Prima rotazione: yaw (rotazione attorno all'asse Z)
-    ctx.rotate(yaw);
+    // SOLUZIONE MIGLIORATA: Utilizziamo la matrice di rotazione completa
+    // Invece di applicare rotazioni sequenziali che possono causare problemi di gimbal lock,
+    // possiamo disegnare il razzo in diverse posizioni per mostrare chiaramente lo yaw
     
-    // Seconda rotazione: pitch (rotazione attorno all'asse Y)
-    // Ruotiamo di 180 + pitch per avere la punta verso l'alto
-    ctx.rotate(Math.PI + pitch);
+    // Per mostrare chiaramente lo yaw, disegniamo il razzo dall'alto
     
-    // Terza rotazione: roll (rotazione attorno all'asse X)
-    ctx.rotate(roll);
+    // Prima spostiamo il razzo in una posizione in cui la punta è verso l'alto (direzione Z)
+    ctx.save();
     
-    // Disegna il corpo del razzo
-    ctx.fillStyle = '#d0d0d0';
+    // Ruotazione yaw - rotazione attorno all'asse Y
+    ctx.rotate(yawRad);
+    
+    // Desenha o corpo do foguete
+    drawRocket(ctx, rocketWidth, rocketLength, rollRad, pitchRad);
+    
+    // Ripristina lo stato
+    ctx.restore();
+    
+    // Ora disegniamo una vista dall'alto per mostrare chiaramente lo yaw
+    // Spostiamo la vista in alto a destra del canvas principale
+    ctx.save();
+    ctx.translate(width/2 - 70, -height/2 + 70);
+    
+    // Disegna un cerchio come sfondo per la vista dall'alto
+    ctx.fillStyle = '#f0f0f0';
+    ctx.beginPath();
+    ctx.arc(0, 0, 30, 0, Math.PI * 2);
+    ctx.fill();
     ctx.strokeStyle = '#000';
     ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.rect(-rocketWidth / 2, -rocketLength / 2, rocketWidth, rocketLength);
-    ctx.fill();
     ctx.stroke();
     
-    // Disegna la punta del razzo
-    ctx.fillStyle = '#ff4444';
-    ctx.beginPath();
-    ctx.moveTo(-rocketWidth / 2, -rocketLength / 2);
-    ctx.lineTo(0, -rocketLength / 2 - 20);
-    ctx.lineTo(rocketWidth / 2, -rocketLength / 2);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-  
-    // Disegna un indicatore di orientamento visibile dall'alto
-    // Una freccia sopra il razzo che indica la direzione di volo
-    ctx.fillStyle = '#ff8800';
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 1;
-  
-    // Disegna la base dell'indicatore
-    ctx.beginPath();
-    ctx.arc(0, -rocketLength / 2 - 10, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  
-    // Disegna una freccia che punta in avanti
-    ctx.beginPath();
-    ctx.moveTo(0, -rocketLength / 2 - 18);  // Punta della freccia
-    ctx.lineTo(-5, -rocketLength / 2 - 10); // Lato sinistro
-    ctx.lineTo(5, -rocketLength / 2 - 10);  // Lato destro
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-  
-    // Disegna un punto di riferimento di colore contrastante sulla punta
-    ctx.fillStyle = '#ff00ff';
-    ctx.beginPath();
-    ctx.arc(0, -rocketLength / 2 - 25, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+    // Disegna una freccia che indica la direzione del razzo (vista dall'alto)
+    ctx.save();
+    ctx.rotate(yawRad);
     
-    // Disegna le alette con colori più visibili per distinguere l'orientamento
-    // Aletta 1 (sinistra)
-    ctx.fillStyle = '#4444ff';
+    // Corpo della freccia
+    ctx.fillStyle = '#444';
     ctx.beginPath();
-    ctx.moveTo(-rocketWidth / 2, rocketLength / 2);
-    ctx.lineTo(-rocketWidth / 2 - 15, rocketLength / 2 + 20);
-    ctx.lineTo(-rocketWidth / 2, rocketLength / 2 - 10);
+    ctx.moveTo(0, -20);  // Punta della freccia
+    ctx.lineTo(-8, 0);   // Base sinistra
+    ctx.lineTo(8, 0);    // Base destra
     ctx.closePath();
     ctx.fill();
-    ctx.stroke();
     
-    // Aletta 2 (destra)
-    ctx.fillStyle = '#4444ff';
-    ctx.beginPath();
-    ctx.moveTo(rocketWidth / 2, rocketLength / 2);
-    ctx.lineTo(rocketWidth / 2 + 15, rocketLength / 2 + 20);
-    ctx.lineTo(rocketWidth / 2, rocketLength / 2 - 10);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+    // Testo "N" (Nord) per indicare il riferimento
+    ctx.restore();
+    ctx.fillStyle = '#000';
+    ctx.font = '10px Arial';
+    ctx.fillText('N', 0, -33);
     
-    // Aletta 3 (posteriore - in diverso colore per distinguere meglio la rotazione yaw)
-    ctx.fillStyle = '#44ff44';
-    ctx.beginPath();
-    ctx.moveTo(0, rocketLength / 2);
-    ctx.lineTo(0, rocketLength / 2 + 20);
-    ctx.lineTo(10, rocketLength / 2 - 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    
-    // Aletta 4 (anteriore - in diverso colore per distinguere meglio la rotazione yaw)
-    ctx.fillStyle = '#ff44ff';
-    ctx.beginPath();
-    ctx.moveTo(0, rocketLength / 2);
-    ctx.lineTo(0, rocketLength / 2 + 20);
-    ctx.lineTo(-10, rocketLength / 2 - 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+    // Restaura lo stato del canvas
+    ctx.restore();
     
     // Disegna i vettori di accelerazione
     const accelScale = 50;
@@ -672,6 +627,101 @@ const TelemetryVisualization: React.FC = () => {
     ctx.fillText('Accel Totale', width - 150, legendY + legendSpacing * 3 + 12);
     
   }, [currentPoint, filter, rocketLength, rocketWidth]);
+
+  // Funzione di supporto per disegnare il razzo
+  function drawRocket(ctx: CanvasRenderingContext2D, rocketWidth: number, rocketLength: number, roll: number, pitch: number) {
+    // Applica le rotazioni per pitch e roll
+    ctx.rotate(Math.PI + pitch); // Punta verso l'alto + pitch
+    ctx.rotate(roll);            // Roll
+    
+    // Disegna il corpo del razzo
+    ctx.fillStyle = '#d0d0d0';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.rect(-rocketWidth / 2, -rocketLength / 2, rocketWidth, rocketLength);
+    ctx.fill();
+    ctx.stroke();
+    
+    // Disegna la punta del razzo
+    ctx.fillStyle = '#ff4444';
+    ctx.beginPath();
+    ctx.moveTo(-rocketWidth / 2, -rocketLength / 2);
+    ctx.lineTo(0, -rocketLength / 2 - 20);
+    ctx.lineTo(rocketWidth / 2, -rocketLength / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Disegna un indicatore di orientamento visibile dall'alto
+    ctx.fillStyle = '#ff8800';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    
+    // Disegna la base dell'indicatore
+    ctx.beginPath();
+    ctx.arc(0, -rocketLength / 2 - 10, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    
+    // Disegna una freccia che punta in avanti
+    ctx.beginPath();
+    ctx.moveTo(0, -rocketLength / 2 - 18);  // Punta della freccia
+    ctx.lineTo(-5, -rocketLength / 2 - 10); // Lato sinistro
+    ctx.lineTo(5, -rocketLength / 2 - 10);  // Lato destro
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Disegna un punto di riferimento di colore contrastante sulla punta
+    ctx.fillStyle = '#ff00ff';
+    ctx.beginPath();
+    ctx.arc(0, -rocketLength / 2 - 25, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    
+    // Disegna le alette con colori più visibili per distinguere l'orientamento
+    // Aletta 1 (sinistra)
+    ctx.fillStyle = '#4444ff';
+    ctx.beginPath();
+    ctx.moveTo(-rocketWidth / 2, rocketLength / 2);
+    ctx.lineTo(-rocketWidth / 2 - 15, rocketLength / 2 + 20);
+    ctx.lineTo(-rocketWidth / 2, rocketLength / 2 - 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Aletta 2 (destra)
+    ctx.fillStyle = '#4444ff';
+    ctx.beginPath();
+    ctx.moveTo(rocketWidth / 2, rocketLength / 2);
+    ctx.lineTo(rocketWidth / 2 + 15, rocketLength / 2 + 20);
+    ctx.lineTo(rocketWidth / 2, rocketLength / 2 - 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Aletta 3 (posteriore - in diverso colore per distinguere meglio la rotazione yaw)
+    ctx.fillStyle = '#44ff44';
+    ctx.beginPath();
+    ctx.moveTo(0, rocketLength / 2);
+    ctx.lineTo(0, rocketLength / 2 + 20);
+    ctx.lineTo(10, rocketLength / 2 - 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Aletta 4 (anteriore - in diverso colore per distinguere meglio la rotazione yaw)
+    ctx.fillStyle = '#ff44ff';
+    ctx.beginPath();
+    ctx.moveTo(0, rocketLength / 2);
+    ctx.lineTo(0, rocketLength / 2 + 20);
+    ctx.lineTo(-10, rocketLength / 2 - 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
   
   // Gestione del movimento del mouse sul grafico
   const handleMouseMove = (e: any): void => {
@@ -836,7 +886,7 @@ const TelemetryVisualization: React.FC = () => {
                   <XAxis 
                     dataKey="relativeTime" 
                     type="number"
-                    domain={[0, 'dataMax']}
+                    domain={[(dataMax: number) => (dataMax > 30 ? dataMax - 30 : 0), 'dataMax']}
                     label={{ value: 'Tempo (s)', position: 'insideBottom', offset: -5 }}
                   />
                   <YAxis 
@@ -889,7 +939,7 @@ const TelemetryVisualization: React.FC = () => {
                   <XAxis 
                     dataKey="relativeTime" 
                     type="number"
-                    domain={[0, 'dataMax']}
+                    domain={[(dataMax: number) => (dataMax > 30 ? dataMax - 30 : 0), 'dataMax']}
                     label={{ value: 'Tempo (s)', position: 'insideBottom', offset: -5 }}
                   />
                   <YAxis 
@@ -942,7 +992,7 @@ const TelemetryVisualization: React.FC = () => {
                   <XAxis 
                     dataKey="relativeTime" 
                     type="number"
-                    domain={[0, 'dataMax']}
+                    domain={[(dataMax: number) => (dataMax > 30 ? dataMax - 30 : 0), 'dataMax']}
                     label={{ value: 'Tempo (s)', position: 'insideBottom', offset: -5 }}
                   />
                   <YAxis 
@@ -995,7 +1045,7 @@ const TelemetryVisualization: React.FC = () => {
                   <XAxis 
                     dataKey="relativeTime" 
                     type="number"
-                    domain={[0, 'dataMax']}
+                    domain={[(dataMax: number) => (dataMax > 30 ? dataMax - 30 : 0), 'dataMax']}
                     label={{ value: 'Tempo (s)', position: 'insideBottom', offset: -5 }}
                   />
                   <YAxis 

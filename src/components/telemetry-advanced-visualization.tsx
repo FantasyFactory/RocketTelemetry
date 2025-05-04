@@ -20,6 +20,9 @@ interface SensorDataPoint {
   compAccelZ?: number;
 }
 
+// Definizione del tipo di filtro
+type FilterType = 'complementary' | 'kalman' | 'madgwick';
+
 interface ApiResponse {
   sensors: {
     accel: {
@@ -39,10 +42,6 @@ interface ApiResponse {
   };
 }
 
-// Funzione di utilità per convertire da gradi a radianti
-const degToRad = (degrees: number): number => {
-  return degrees * (Math.PI / 180);
-};
 
 // Implementazione del filtro complementare per la fusione dei dati
 const applyComplementaryFilter = (data: SensorDataPoint[], alpha = 0.98): SensorDataPoint[] => {
@@ -270,17 +269,433 @@ function compensateAcceleration(
   };
 }
 
-  const TelemetryVisualization: React.FC = () => {
+
+// Implementazione del filtro di Kalman per la fusione dei dati IMU
+// Questo filtro è più complesso ma offre una stima ottimale dello stato in presenza di rumore
+// e incertezze nelle misurazioni.
+const applyKalmanFilter = (data: SensorDataPoint[]): SensorDataPoint[] => {
+  if (!data || data.length === 0) return [];
+  
+  const result = [...data];
+  
+  // Stati del filtro di Kalman (6 stati: roll, pitch, yaw e loro derivate)
+  // x = [roll, pitch, yaw, roll_rate, pitch_rate, yaw_rate]
+  let x = new Array(6).fill(0);
+  
+  // Matrice di covarianza: rappresenta l'incertezza nella stima dello stato
+  // Inizializziamo con valori alti sulla diagonale per indicare alta incertezza iniziale
+  let P = Array(6).fill(0).map(() => Array(6).fill(0));
+  for (let i = 0; i < 6; i++) {
+    P[i][i] = i < 3 ? 1000 : 100; // Maggiore incertezza per angoli, minore per velocità angolari
+  }
+  
+  // Parametri del rumore di processo e di misurazione
+  // Questi valori dovrebbero essere calibrati in base al sensore specifico
+  // Rumore di processo: incertezza nel modello di evoluzione dello stato
+  const processNoise = 0.01;
+  // Rumore di misurazione: incertezza nelle misurazioni dell'accelerometro/giroscopio
+  const measurementNoiseAccel = 0.1; // accelerometro (più rumoroso)
+  const measurementNoiseGyro = 0.01; // giroscopio (meno rumoroso a breve termine)
+  
+  // Matrice del rumore di processo Q (6x6)
+  let Q = Array(6).fill(0).map(() => Array(6).fill(0));
+  for (let i = 0; i < 6; i++) {
+    Q[i][i] = processNoise;
+  }
+  
+  // Matrice del rumore di misurazione R (6x6)
+  let R = Array(6).fill(0).map(() => Array(6).fill(0));
+  for (let i = 0; i < 3; i++) {
+    R[i][i] = measurementNoiseAccel; // Per le misurazioni dell'accelerometro (angoli)
+  }
+  for (let i = 3; i < 6; i++) {
+    R[i][i] = measurementNoiseGyro; // Per le misurazioni del giroscopio (velocità angolari)
+  }
+  
+  // Matrice di transizione dello stato F (6x6)
+  // Per il primo punto, inizializziamo F come matrice identità
+  let F: number[][] = Array(6).fill(0).map((_, i) => Array(6).fill(0).map((_, j) => i === j ? 1 : 0));
+
+  
+  // Matrice di osservazione H (6x6)
+  // In questo caso semplice, assumiamo che misuriamo direttamente gli stati
+  let H = Array(6).fill(0).map((_, i) => Array(6).fill(0).map((_, j) => i === j ? 1 : 0));
+  
+  // Inizializziamo con i primi valori dall'accelerometro
+  const firstPoint = data[0];
+  // Roll, Pitch dalle misurazioni dell'accelerometro
+  x[0] = Math.atan2(firstPoint.accelY, firstPoint.accelZ) * (180 / Math.PI); // Roll
+  x[1] = Math.atan2(-firstPoint.accelX, Math.sqrt(firstPoint.accelY * firstPoint.accelY + firstPoint.accelZ * firstPoint.accelZ)) * (180 / Math.PI); // Pitch
+  // Yaw inizializzato a 0 (non è direttamente osservabile dall'accelerometro)
+  x[2] = 0;
+  // Velocità angolari inizializzate dai valori del giroscopio
+  x[3] = firstPoint.gyroX; // Roll rate
+  x[4] = firstPoint.gyroY; // Pitch rate
+  x[5] = firstPoint.gyroZ; // Yaw rate
+  
+  // Salva gli angoli iniziali
+  result[0].roll = x[0];
+  result[0].pitch = x[1];
+  result[0].yaw = x[2];
+  
+  // Funzione per calcolare il dt tra due punti
+  const calculateDt = (current: SensorDataPoint, previous: SensorDataPoint | null): number => {
+    if (!previous) return 0.1; // Default a 100ms se non c'è un punto precedente
+    
+    // Utilizziamo il timestamp relativo per calcolare dt
+    if (current.relativeTime !== undefined && previous.relativeTime !== undefined) {
+      return current.relativeTime - previous.relativeTime;
+    }
+    
+    // Fallback al timestamp del sistema
+    return (current.timestamp - previous.timestamp) / 1000; // Converti in secondi
+  };
+  
+  // Loop principale del filtro di Kalman
+  for (let i = 1; i < result.length; i++) {
+    const point = result[i];
+    const prevPoint = result[i-1];
+    const dt = calculateDt(point, prevPoint);
+    
+    // Limita dt a un valore massimo ragionevole per evitare salti eccessivi
+    const limitedDt = Math.min(dt, 0.5);
+    
+    // Aggiorna la matrice di transizione dello stato F con il dt attuale
+    // La matrice F modella come lo stato evolve nel tempo
+    // Per un sistema con angoli e velocità angolari:
+    // [roll]       = [1, 0, 0, dt, 0, 0] [roll]
+    // [pitch]      = [0, 1, 0, 0, dt, 0] [pitch]
+    // [yaw]        = [0, 0, 1, 0, 0, dt] [yaw]
+    // [roll_rate]  = [0, 0, 0, 1, 0, 0]  [roll_rate]
+    // [pitch_rate] = [0, 0, 0, 0, 1, 0]  [pitch_rate]
+    // [yaw_rate]   = [0, 0, 0, 0, 0, 1]  [yaw_rate]
+    F[0][3] = limitedDt;
+    F[1][4] = limitedDt;
+    F[2][5] = limitedDt;
+    
+    // 1. Predizione: proietta lo stato e la covarianza in avanti nel tempo
+    // x = F * x
+    const x_pred = multiplyMatrixVector(F, x);
+    
+    // P = F * P * F^T + Q
+    const FP = multiplyMatrices(F, P);
+    const FT = transposeMatrix(F);
+    const FPFT = multiplyMatrices(FP, FT);
+    const P_pred = addMatrices(FPFT, Q);
+    
+    // 2. Ottieni le misurazioni
+    // Calcolo degli angoli dall'accelerometro
+    const accelRoll = Math.atan2(point.accelY, point.accelZ) * (180 / Math.PI);
+    const accelPitch = Math.atan2(-point.accelX, Math.sqrt(point.accelY * point.accelY + point.accelZ * point.accelZ)) * (180 / Math.PI);
+    
+    // Vettore delle misurazioni z
+    // z = [accelRoll, accelPitch, yaw_stimato, gyroX, gyroY, gyroZ]
+    const z = [
+      accelRoll,              // Roll dall'accelerometro
+      accelPitch,             // Pitch dall'accelerometro
+      x_pred[2] + point.gyroZ * limitedDt, // Yaw stimato (integrato dal giroscopio)
+      point.gyroX,            // Roll rate dal giroscopio
+      point.gyroY,            // Pitch rate dal giroscopio
+      point.gyroZ             // Yaw rate dal giroscopio
+    ];
+    
+    // 3. Aggiornamento: incorpora le nuove misurazioni
+    // y = z - H * x_pred (residuo/innovazione)
+    const Hx = multiplyMatrixVector(H, x_pred);
+    const y = z.map((val, idx) => val - Hx[idx]);
+    
+    // S = H * P_pred * H^T + R (covarianza residua)
+    const HP = multiplyMatrices(H, P_pred);
+    const HT = transposeMatrix(H);
+    const HPHT = multiplyMatrices(HP, HT);
+    const S = addMatrices(HPHT, R);
+    
+    // K = P_pred * H^T * S^-1 (guadagno di Kalman)
+    const S_inv = invertMatrix(S);
+    const PHT = multiplyMatrices(P_pred, HT);
+    const K = multiplyMatrices(PHT, S_inv);
+    
+    // x = x_pred + K * y (aggiornamento dello stato)
+    const Ky = multiplyMatrixVector(K, y);
+    x = x_pred.map((val, idx) => val + Ky[idx]);
+    
+    // P = (I - K * H) * P_pred (aggiornamento della covarianza)
+    const I = Array(6).fill(0).map((_, i) => Array(6).fill(0).map((_, j) => i === j ? 1 : 0));
+    const KH = multiplyMatrices(K, H);
+    const I_KH = subtractMatrices(I, KH);
+    P = multiplyMatrices(I_KH, P_pred);
+    
+    // Normalizza gli angoli nel range -180 a 180
+    while (x[0] > 180) x[0] -= 360;
+    while (x[0] < -180) x[0] += 360;
+    while (x[1] > 180) x[1] -= 360;
+    while (x[1] < -180) x[1] += 360;
+    while (x[2] > 180) x[2] -= 360;
+    while (x[2] < -180) x[2] += 360;
+    
+    // Salva i risultati
+    result[i].roll = x[0];
+    result[i].pitch = x[1];
+    result[i].yaw = x[2];
+  }
+  
+  return result;
+};
+
+// Funzioni di supporto per l'algebra lineare utilizzate nel filtro di Kalman
+
+// Moltiplicazione matrice-vettore
+function multiplyMatrixVector(A: number[][], v: number[]): number[] {
+  const result = new Array(A.length).fill(0);
+  for (let i = 0; i < A.length; i++) {
+    for (let j = 0; j < v.length; j++) {
+      result[i] += A[i][j] * v[j];
+    }
+  }
+  return result;
+}
+
+// Moltiplicazione matrice-matrice
+function multiplyMatrices(A: number[][], B: number[][]): number[][] {
+  const result = Array(A.length).fill(0).map(() => Array(B[0].length).fill(0));
+  for (let i = 0; i < A.length; i++) {
+    for (let j = 0; j < B[0].length; j++) {
+      for (let k = 0; k < A[0].length; k++) {
+        result[i][j] += A[i][k] * B[k][j];
+      }
+    }
+  }
+  return result;
+}
+
+// Trasposta di una matrice
+function transposeMatrix(A: number[][]): number[][] {
+  const result = Array(A[0].length).fill(0).map(() => Array(A.length).fill(0));
+  for (let i = 0; i < A.length; i++) {
+    for (let j = 0; j < A[0].length; j++) {
+      result[j][i] = A[i][j];
+    }
+  }
+  return result;
+}
+
+// Somma di due matrici
+function addMatrices(A: number[][], B: number[][]): number[][] {
+  const result = Array(A.length).fill(0).map(() => Array(A[0].length).fill(0));
+  for (let i = 0; i < A.length; i++) {
+    for (let j = 0; j < A[0].length; j++) {
+      result[i][j] = A[i][j] + B[i][j];
+    }
+  }
+  return result;
+}
+
+// Sottrazione di due matrici
+function subtractMatrices(A: number[][], B: number[][]): number[][] {
+  const result = Array(A.length).fill(0).map(() => Array(A[0].length).fill(0));
+  for (let i = 0; i < A.length; i++) {
+    for (let j = 0; j < A[0].length; j++) {
+      result[i][j] = A[i][j] - B[i][j];
+    }
+  }
+  return result;
+}
+
+// Inversione di una matrice (implementazione semplificata per matrici 6x6)
+function invertMatrix(A: number[][]): number[][] {
+  // In una implementazione reale questo sarebbe più complesso
+  // Qui usiamo una semplificazione assumendo che la matrice sia diagonale
+  // quindi possiamo semplicemente invertire gli elementi sulla diagonale
+  const result = Array(A.length).fill(0).map(() => Array(A[0].length).fill(0));
+  for (let i = 0; i < A.length; i++) {
+    result[i][i] = 1.0 / A[i][i];
+  }
+  return result;
+}
+
+// Implementazione del filtro di Madgwick per la fusione dei dati IMU
+// Questo algoritmo è computazionalmente efficiente e offre buone prestazioni
+// per la stima dell'orientamento.
+const applyMadgwickFilter = (data: SensorDataPoint[], beta = 0.1): SensorDataPoint[] => {
+  if (!data || data.length === 0) return [];
+  
+  const result = [...data];
+  
+  // Quaternione che rappresenta l'orientamento (inizializzato come identità)
+  let q = [1, 0, 0, 0]; // [w, x, y, z]
+  
+  // Calcola il dt (intervallo di tempo) tra campioni consecutivi
+  const calculateDt = (current: SensorDataPoint, previous: SensorDataPoint | null): number => {
+    if (!previous) return 0.1; // Default a 100ms se non c'è un punto precedente
+    
+    // Utilizziamo il timestamp relativo per calcolare dt
+    if (current.relativeTime !== undefined && previous.relativeTime !== undefined) {
+      return current.relativeTime - previous.relativeTime;
+    }
+    
+    // Fallback al timestamp del sistema
+    return (current.timestamp - previous.timestamp) / 1000; // Converti in secondi
+  };
+  
+  // Applica il filtro Madgwick a ogni punto
+  for (let i = 0; i < result.length; i++) {
+    const point = result[i];
+    const prevPoint = i > 0 ? result[i-1] : null;
+    const dt = calculateDt(point, prevPoint);
+    
+    // Limita dt a un valore massimo ragionevole per evitare salti eccessivi
+    const limitedDt = Math.min(dt, 0.5);
+    
+    // Converte le velocità angolari da gradi/secondo a radianti/secondo
+    const gx = degToRad(point.gyroX);
+    const gy = degToRad(point.gyroY);
+    const gz = degToRad(point.gyroZ);
+    
+    // Normalizza le letture dell'accelerometro
+    const ax = point.accelX;
+    const ay = point.accelY;
+    const az = point.accelZ;
+    const norm = Math.sqrt(ax * ax + ay * ay + az * az);
+    const ax_norm = ax / norm;
+    const ay_norm = ay / norm;
+    const az_norm = az / norm;
+    
+    // Passo 1: Calcola il gradiente della funzione obiettivo
+    // Struttura del quaternione: q = [q0, q1, q2, q3] = [w, x, y, z]
+    const _2q0 = 2.0 * q[0];
+    const _2q1 = 2.0 * q[1];
+    const _2q2 = 2.0 * q[2];
+    const _2q3 = 2.0 * q[3];
+    const _4q0 = 4.0 * q[0];
+    const _4q1 = 4.0 * q[1];
+    const _4q2 = 4.0 * q[2];
+    const _8q1 = 8.0 * q[1];
+    const _8q2 = 8.0 * q[2];
+    const q0q0 = q[0] * q[0];
+    const q1q1 = q[1] * q[1];
+    const q2q2 = q[2] * q[2];
+    const q3q3 = q[3] * q[3];
+    
+    // Calcola il gradiente (Jacobiano della funzione obiettivo moltiplicato per l'errore)
+    const s0 = _4q0 * q2q2 + _2q2 * ax_norm + _4q0 * q1q1 - _2q1 * ay_norm;
+    const s1 = _4q1 * q3q3 - _2q3 * ax_norm + 4.0 * q0q0 * q[1] - _2q0 * ay_norm - _4q1 + _8q1 * q1q1 + _8q1 * q2q2 + _4q1 * az_norm;
+    const s2 = 4.0 * q0q0 * q[2] + _2q0 * ax_norm + _4q2 * q3q3 - _2q3 * ay_norm - _4q2 + _8q2 * q1q1 + _8q2 * q2q2 + _4q2 * az_norm;
+    const s3 = 4.0 * q1q1 * q[3] - _2q1 * ax_norm + 4.0 * q2q2 * q[3] - _2q2 * ay_norm;
+    
+    // Normalizza il gradiente
+    const recipNorm = 1.0 / Math.sqrt(s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3);
+    const s0_norm = s0 * recipNorm;
+    const s1_norm = s1 * recipNorm;
+    const s2_norm = s2 * recipNorm;
+    const s3_norm = s3 * recipNorm;
+    
+    // Passo 2: Calcola la derivata del quaternione
+    // Struttura: qdot = 0.5 * q ⊗ [0, gx, gy, gz] - beta * [s0, s1, s2, s3]
+    const qDot0 = 0.5 * (-q[1] * gx - q[2] * gy - q[3] * gz) - beta * s0_norm;
+    const qDot1 = 0.5 * (q[0] * gx + q[2] * gz - q[3] * gy) - beta * s1_norm;
+    const qDot2 = 0.5 * (q[0] * gy - q[1] * gz + q[3] * gx) - beta * s2_norm;
+    const qDot3 = 0.5 * (q[0] * gz + q[1] * gy - q[2] * gx) - beta * s3_norm;
+    
+    // Passo 3: Integra la derivata del quaternione per ottenere il nuovo quaternione
+    q[0] += qDot0 * limitedDt;
+    q[1] += qDot1 * limitedDt;
+    q[2] += qDot2 * limitedDt;
+    q[3] += qDot3 * limitedDt;
+    
+    // Normalizza il quaternione
+    const recipNorm2 = 1.0 / Math.sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    q[0] *= recipNorm2;
+    q[1] *= recipNorm2;
+    q[2] *= recipNorm2;
+    q[3] *= recipNorm2;
+    
+    // Converti il quaternione in angoli di Eulero (roll, pitch, yaw)
+    // Roll (x-axis rotation)
+    const sinr_cosp = 2.0 * (q[0] * q[1] + q[2] * q[3]);
+    const cosr_cosp = 1.0 - 2.0 * (q[1] * q[1] + q[2] * q[2]);
+    const roll = Math.atan2(sinr_cosp, cosr_cosp) * (180.0 / Math.PI);
+    
+    // Pitch (y-axis rotation)
+    const sinp = 2.0 * (q[0] * q[2] - q[3] * q[1]);
+    let pitch;
+    if (Math.abs(sinp) >= 1) {
+      // Caso limite (gimbal lock)
+      pitch = Math.sign(sinp) * 90.0;
+    } else {
+      pitch = Math.asin(sinp) * (180.0 / Math.PI);
+    }
+    
+    // Yaw (z-axis rotation)
+    const siny_cosp = 2.0 * (q[0] * q[3] + q[1] * q[2]);
+    const cosy_cosp = 1.0 - 2.0 * (q[2] * q[2] + q[3] * q[3]);
+    let yaw = Math.atan2(siny_cosp, cosy_cosp) * (180.0 / Math.PI);
+    
+    // Normalizza yaw nel range -180 a 180
+    while (yaw > 180.0) yaw -= 360.0;
+    while (yaw < -180.0) yaw += 360.0;
+    
+    // Aggiorna i risultati con gli angoli calcolati
+    result[i].roll = roll;
+    result[i].pitch = pitch;
+    result[i].yaw = yaw;
+  }
+  
+  return result;
+};
+
+// Funzione di utilità per convertire da gradi a radianti
+const degToRad = (degrees: number): number => {
+  return degrees * (Math.PI / 180);
+};
+
+// Funzione di utilità per convertire da radianti a gradi
+const radToDeg = (radians: number): number => {
+  return radians * (180 / Math.PI);
+};
+
+
+
+const TelemetryVisualization: React.FC = () => {
   const [data, setData] = useState<SensorDataPoint[]>([]);
   const [filteredData, setFilteredData] = useState<SensorDataPoint[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<string>('acceleration');
   const [currentPoint, setCurrentPoint] = useState<SensorDataPoint | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [filter, setFilter] = useState<boolean>(true);
+  const [filterEnabled, setFilterEnabled] = useState<boolean>(true);
+  const [filterType, setFilterType] = useState<FilterType>('complementary');
   const [isRealtime, setIsRealtime] = useState<boolean>(false);
   const [realtimeInterval, setRealtimeInterval] = useState<NodeJS.Timeout | null>(null);
   const [firstFetchTimestamp, setFirstFetchTimestamp] = useState<number>(0);
+
+  // Funzione per applicare il filtro selezionato ai dati
+  const applySelectedFilter = (data: SensorDataPoint[], filterType: FilterType): SensorDataPoint[] => {
+    switch (filterType) {
+      case 'complementary':
+        return applyImprovedComplementaryFilter(data);
+      case 'kalman':
+        return applyKalmanFilter(data);
+      case 'madgwick':
+        return applyMadgwickFilter(data);
+      default:
+        return applyImprovedComplementaryFilter(data);
+    }
+  };
+
+  // Effetto per riapplicare il filtro quando cambia il tipo di filtro
+  useEffect(() => {
+    if (data.length === 0) return;
+    const filteredResult = applySelectedFilter(data, filterType);
+    setFilteredData(filteredResult);
+    
+    // Aggiorna il punto corrente se esiste
+    if (currentPoint) {
+      const index = data.findIndex(p => p.timestamp === currentPoint.timestamp);
+      if (index !== -1 && filteredResult[index]) {
+        setCurrentPoint(filteredResult[index]);
+      }
+    }
+  }, [filterType]);
 
   // Dimensioni del razzo per la visualizzazione 3D
   const rocketLength = 80;
@@ -321,13 +736,13 @@ function compensateAcceleration(
 
   // Versione migliorata della funzione fetchRealtimeData
   // Modifica la funzione fetchRealtimeData per gestire correttamente i timestamp relativi
+  // Versione migliorata della funzione fetchRealtimeData per utilizzare il filtro selezionato
   const fetchRealtimeData = async (): Promise<void> => {
     let retries = 3; // Numero di tentativi in caso di errore
     
     const attemptFetch = async (): Promise<void> => {
       try {
-        // Qui userei l'API reale o il mock API a seconda delle necessità
-        const jsonData = await mockRocketApi();
+        const jsonData = await mockRocketApi(); // Usa dati mockati
         /*
         const response = await fetch('http://192.168.4.1/imudata', {
           signal: AbortSignal.timeout(2000)
@@ -354,7 +769,7 @@ function compensateAcceleration(
         // Crea un nuovo punto dati con un timestamp relativo
         const newDataPoint: SensorDataPoint = {
           timestamp: jsonData.system.millis,
-          relativeTime: relativeTime, // Usa il tempo relativo dall'inizio della sessione
+          relativeTime: relativeTime,
           accelX: jsonData.sensors.accel.x,
           accelY: jsonData.sensors.accel.y,
           accelZ: jsonData.sensors.accel.z,
@@ -374,20 +789,26 @@ function compensateAcceleration(
           return newData;
         });
         
-        // Applichiamo il filtro di fusione
+        // Applichiamo il filtro selezionato
         setFilteredData(prevFiltered => {
           const updatedData = [...prevFiltered, newDataPoint];
           const maxPoints = 300;
+          let filtered;
+          
           if (updatedData.length > maxPoints) {
-            return applyImprovedComplementaryFilter(updatedData.slice(updatedData.length - maxPoints));
+            const slicedData = updatedData.slice(updatedData.length - maxPoints);
+            filtered = applySelectedFilter(slicedData, filterType);
+          } else {
+            filtered = applySelectedFilter(updatedData, filterType);
           }
-          return applyImprovedComplementaryFilter(updatedData);
+          
+          return filtered;
         });
         
         // Aggiorniamo il punto corrente
-        setCurrentPoint(prevFiltered => {
-          if (prevFiltered && Array.isArray(prevFiltered) && prevFiltered.length > 0) {
-            return prevFiltered[prevFiltered.length - 1];
+        setCurrentPoint(filtered => {
+          if (filtered && Array.isArray(filtered) && filtered.length > 0) {
+            return filtered[filtered.length - 1];
           }
           return newDataPoint;
         });
@@ -556,8 +977,8 @@ function compensateAcceleration(
     
     setData(parsedData);
     
-    // Applicazione del filtro di fusione
-    const filteredResult = applyImprovedComplementaryFilter(parsedData);
+    // Applicazione del filtro selezionato
+    const filteredResult = applySelectedFilter(parsedData, filterType);
     setFilteredData(filteredResult);
     
     // Imposta il punto corrente al primo punto dei dati
@@ -592,9 +1013,9 @@ function compensateAcceleration(
     const centerY = height / 2;
     
     // Ottieni gli angoli in radianti
-    const rollRad = filter && currentPoint.roll !== undefined ? degToRad(currentPoint.roll) : 0;
-    const pitchRad = filter && currentPoint.pitch !== undefined ? degToRad(currentPoint.pitch) : 0;
-    const yawRad = filter && currentPoint.yaw !== undefined ? degToRad(currentPoint.yaw) : 0;
+    const rollRad = filterEnabled  && currentPoint.roll !== undefined ? degToRad(currentPoint.roll) : 0;
+    const pitchRad = filterEnabled  && currentPoint.pitch !== undefined ? degToRad(currentPoint.pitch) : 0;
+    const yawRad = filterEnabled  && currentPoint.yaw !== undefined ? degToRad(currentPoint.yaw) : 0;
     
     // Definizione di accelScale per i vettori di accelerazione
     const accelScale = 50;
@@ -677,7 +1098,7 @@ function compensateAcceleration(
     // Disegna la legenda
     drawLegend(ctx, width, height);
     
-  }, [currentPoint, filter, rocketWidth, rocketLength]);
+  }, [currentPoint, filterEnabled, rocketWidth, rocketLength]);
   
   // Funzione per disegnare gli assi di riferimento
   function drawReferenceAxes(ctx: CanvasRenderingContext2D, width: number, height: number) {
@@ -1170,15 +1591,32 @@ function compensateAcceleration(
           Golden Slumbers 1
         </button>
         
+        {/* Controlli per il filtro */}
         <div className="flex items-center mx-2">
-          <label htmlFor="filterToggle" className="mr-2">Filtro di Fusione:</label>
+          <label htmlFor="filterToggle" className="mr-2">Filtro:</label>
           <input
             type="checkbox"
             id="filterToggle"
-            checked={filter}
-            onChange={(e) => setFilter(e.target.checked)}
+            checked={filterEnabled}
+            onChange={(e) => setFilterEnabled(e.target.checked)}
             className="w-4 h-4"
           />
+        </div>
+
+        {/* Tipo di filtro */}
+        <div className="flex items-center">
+          <label htmlFor="filterType" className="mr-2">Tipo di Filtro:</label>
+          <select
+            id="filterType"
+            value={filterType}
+            onChange={(e) => setFilterType(e.target.value as FilterType)}
+            className="border p-1 rounded"
+            disabled={!filterEnabled}
+          >
+            <option value="complementary">Complementare</option>
+            <option value="kalman">Kalman</option>
+            <option value="madgwick">Madgwick</option>
+          </select>
         </div>
         
         {/* Aggiungi i pulsanti per il controllo real-time */}
@@ -1350,7 +1788,7 @@ function compensateAcceleration(
           {/* Grafico dell'orientamento filtrato */}
           {activeTab === 'orientation' && (
             <div>
-              <h3 className="text-lg font-semibold mb-2">Orientamento (Filtro di Fusione)</h3>
+              <h3 className="text-lg font-semibold mb-2">Orientamento (Filtro: {filterType === 'complementary' ? 'Complementare' : filterType === 'kalman' ? 'Kalman' : 'Madgwick'})</h3>
               <ResponsiveContainer width="100%" height={400}>
                 <LineChart 
                   data={filteredData} 
@@ -1460,13 +1898,13 @@ function compensateAcceleration(
                   <div>{currentPoint.accelZ.toFixed(4)}</div>
                   
                   <div>Roll:</div>
-                  <div>{filter && currentPoint.roll ? currentPoint.roll.toFixed(2) : 'N/A'}°</div>
+                  <div>{filterEnabled && currentPoint.roll ? currentPoint.roll.toFixed(2) : 'N/A'}°</div>
                   
                   <div>Pitch:</div>
-                  <div>{filter && currentPoint.pitch ? currentPoint.pitch.toFixed(2) : 'N/A'}°</div>
+                  <div>{filterEnabled && currentPoint.pitch ? currentPoint.pitch.toFixed(2) : 'N/A'}°</div>
                   
                   <div>Yaw:</div>
-                  <div>{filter && currentPoint.yaw ? currentPoint.yaw.toFixed(2) : 'N/A'}°</div>
+                  <div>{filterEnabled && currentPoint.yaw ? currentPoint.yaw.toFixed(2) : 'N/A'}°</div>
                   
                   <div>Altitudine:</div>
                   <div>{currentPoint.altitude.toFixed(3)} m</div>
@@ -1497,18 +1935,126 @@ function compensateAcceleration(
         </div>
       </div>
       
+      {/* Sezione informativa sui filtri */}
+      <div className="p-4 bg-gray-50 rounded border mb-4">
+        <h3 className="text-lg font-semibold mb-2">Note sui Filtri di Fusione Implementati</h3>
+        
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="border p-3 rounded bg-white">
+            <h4 className="font-semibold text-purple-800">Filtro Complementare</h4>
+            <p className="text-sm mt-2">
+              Il filtro complementare combina le misurazioni dell'accelerometro (precise a lungo termine ma rumorose) 
+              con quelle del giroscopio (precise a breve termine ma soggette a deriva). Il parametro alpha (0.98) 
+              determina quanto pesano i dati del giroscopio rispetto a quelli dell'accelerometro.
+            </p>
+            <p className="text-sm mt-2">
+              <strong>Vantaggi:</strong> Semplice, computazionalmente efficiente, facile da implementare.
+            </p>
+            <p className="text-sm mt-2">
+              <strong>Svantaggi:</strong> Meno preciso durante accelerazioni non gravitazionali, non gestisce bene il rumore.
+            </p>
+          </div>
+          
+          <div className="border p-3 rounded bg-white">
+            <h4 className="font-semibold text-blue-800">Filtro di Kalman</h4>
+            <p className="text-sm mt-2">
+              Il filtro di Kalman è un algoritmo ricorsivo che stima lo stato di un sistema dinamico da una serie di misurazioni 
+              rumorose. Utilizza un modello matematico del sistema e della misurazione, insieme alle statistiche del rumore, 
+              per stimare lo stato ottimale.
+            </p>
+            <p className="text-sm mt-2">
+              <strong>Vantaggi:</strong> Gestione ottimale del rumore, stima migliore durante accelerazioni non gravitazionali, 
+              può incorporare modelli fisici complessi.
+            </p>
+            <p className="text-sm mt-2">
+              <strong>Svantaggi:</strong> Più complesso da implementare e tarare, maggiore carico computazionale.
+            </p>
+          </div>
+          
+          <div className="border p-3 rounded bg-white">
+            <h4 className="font-semibold text-green-800">Filtro di Madgwick</h4>
+            <p className="text-sm mt-2">
+              Il filtro di Madgwick è un algoritmo di stima dell'orientamento basato sui quaternioni, progettato 
+              specificamente per i sensori IMU. Utilizza un approccio di ottimizzazione del gradiente discendente 
+              per correggere la deriva del giroscopio.
+            </p>
+            <p className="text-sm mt-2">
+              <strong>Vantaggi:</strong> Computazionalmente efficiente, gestisce bene il gimbal lock, evita la 
+              singolarità degli angoli di Eulero, preciso anche ad alte velocità angolari.
+            </p>
+            <p className="text-sm mt-2">
+              <strong>Svantaggi:</strong> Richiede la regolazione del parametro beta per bilanciare la stabilità 
+              e la reattività del filtro.
+            </p>
+          </div>
+        </div>
+      </div>
+      {/* Tabella di confronto dei filtri */}
       <div className="p-4 bg-gray-50 rounded border">
-        <h3 className="text-lg font-semibold mb-2">Note sul Filtro di Fusione</h3>
-        <p className="mb-2">
-          Il filtro di fusione implementato è un <strong>filtro complementare</strong> che combina le misurazioni 
-          dell'accelerometro (precise a lungo termine ma rumorose) con quelle del giroscopio (precise a breve termine 
-          ma soggette a deriva). Il parametro alpha (0.98) determina quanto pesano i dati del giroscopio rispetto 
-          a quelli dell'accelerometro.
+        <h3 className="text-lg font-semibold mb-2">Confronto delle Prestazioni dei Filtri</h3>
+        <p className="mb-3">
+          I tre filtri implementati hanno caratteristiche e prestazioni diverse che li rendono adatti a scenari specifici:
         </p>
-        <p>
-          Per un'implementazione più sofisticata in un razzo reale, sarebbe consigliabile utilizzare un 
-          <strong> filtro di Kalman</strong> o un <strong>filtro di Madgwick</strong>, che offrono migliori 
-          prestazioni in presenza di accelerazioni non gravitazionali e disturbi magnetici.
+        
+        <table className="w-full border-collapse border">
+          <thead>
+            <tr className="bg-gray-200">
+              <th className="border p-2">Caratteristica</th>
+              <th className="border p-2">Complementare</th>
+              <th className="border p-2">Kalman</th>
+              <th className="border p-2">Madgwick</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="border p-2">Complessità Computazionale</td>
+              <td className="border p-2">Bassa</td>
+              <td className="border p-2">Alta</td>
+              <td className="border p-2">Media</td>
+            </tr>
+            <tr>
+              <td className="border p-2">Precisione con Movimenti Lenti</td>
+              <td className="border p-2">Buona</td>
+              <td className="border p-2">Ottima</td>
+              <td className="border p-2">Buona</td>
+            </tr>
+            <tr>
+              <td className="border p-2">Precisione con Movimenti Rapidi</td>
+              <td className="border p-2">Discreta</td>
+              <td className="border p-2">Buona</td>
+              <td className="border p-2">Ottima</td>
+            </tr>
+            <tr>
+              <td className="border p-2">Gestione del Rumore</td>
+              <td className="border p-2">Discreta</td>
+              <td className="border p-2">Ottima</td>
+              <td className="border p-2">Buona</td>
+            </tr>
+            <tr>
+              <td className="border p-2">Resistenza a Disturbi Esterni</td>
+              <td className="border p-2">Bassa</td>
+              <td className="border p-2">Alta</td>
+              <td className="border p-2">Media</td>
+            </tr>
+            <tr>
+              <td className="border p-2">Facilità di Implementazione</td>
+              <td className="border p-2">Alta</td>
+              <td className="border p-2">Bassa</td>
+              <td className="border p-2">Media</td>
+            </tr>
+            <tr>
+              <td className="border p-2">Adatto per Razzi Amatoriali</td>
+              <td className="border p-2">Per voli semplici</td>
+              <td className="border p-2">Per analisi precise</td>
+              <td className="border p-2">Per voli acrobatici</td>
+            </tr>
+          </tbody>
+        </table>
+        
+        <p className="mt-3">
+          Per ottenere risultati ottimali, è possibile tarare i parametri di ciascun filtro in base alle caratteristiche 
+          specifiche del razzo e dei sensori utilizzati. In un razzo reale, si potrebbe anche implementare un filtro ibrido 
+          che commuta automaticamente tra diverse tecniche in base alle condizioni di volo.
         </p>
       </div>
     </div>

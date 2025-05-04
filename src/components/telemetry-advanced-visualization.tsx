@@ -1,14 +1,48 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
+// Definizione delle interfacce per i tipi di dati
+interface SensorDataPoint {
+  timestamp: number;
+  relativeTime: number;
+  accelX: number;
+  accelY: number;
+  accelZ: number;
+  gyroX: number;
+  gyroY: number;
+  gyroZ: number;
+  altitude: number;
+  roll?: number;
+  pitch?: number;
+  yaw?: number;
+}
+
+interface ApiResponse {
+  sensors: {
+    accel: {
+      x: number;
+      y: number;
+      z: number;
+    };
+    gyro: {
+      x: number;
+      y: number;
+      z: number;
+    };
+    altitude?: number;
+  };
+  system: {
+    millis: number;
+  };
+}
+
 // Funzione di utilità per convertire da gradi a radianti
-const degToRad = (degrees) => {
+const degToRad = (degrees: number): number => {
   return degrees * (Math.PI / 180);
 };
 
 // Implementazione del filtro complementare per la fusione dei dati
-// Modificata la funzione per gestire i casi in cui i dati provengono dalla modalità real-time
-const applyComplementaryFilter = (data, alpha = 0.98) => {
+const applyComplementaryFilter = (data: SensorDataPoint[], alpha = 0.98): SensorDataPoint[] => {
   if (!data || data.length === 0) return [];
   
   const result = [...data];
@@ -24,7 +58,7 @@ const applyComplementaryFilter = (data, alpha = 0.98) => {
   pitch = Math.atan2(-firstPoint.accelX, Math.sqrt(firstPoint.accelY * firstPoint.accelY + firstPoint.accelZ * firstPoint.accelZ)) * (180 / Math.PI);
   
   // Calcola il dt (intervallo di tempo) tra campioni consecutivi
-  const calculateDt = (current, previous) => {
+  const calculateDt = (current: SensorDataPoint, previous: SensorDataPoint | null): number => {
     if (!previous) return 0.1; // Default a 100ms se non c'è un punto precedente
     
     // Utilizziamo il timestamp relativo per calcolare dt
@@ -68,213 +102,188 @@ const applyComplementaryFilter = (data, alpha = 0.98) => {
   return result;
 };
 
-// Funzione per aggiornare dinamicamente il grafico con nuovi dati in tempo reale
-const updateChartWithRealtimeData = (newPoint) => {
-  // Aggiungi il nuovo punto ai dati esistenti
-  setData(prevData => {
-    // Se siamo in modalità real-time, manteniamo solo gli ultimi N punti per prestazioni migliori
-    const maxPoints = 300; // Ad esempio, 30 secondi di dati a 10Hz
-    const newData = [...prevData, newPoint];
-    if (newData.length > maxPoints) {
-      return newData.slice(newData.length - maxPoints);
-    }
-    return newData;
-  });
-  
-  // Applicare il filtro e aggiornare i dati filtrati
-  setFilteredData(prevFiltered => {
-    const updatedData = [...prevFiltered, newPoint];
-    const maxPoints = 300;
-    if (updatedData.length > maxPoints) {
-      return applyComplementaryFilter(updatedData.slice(updatedData.length - maxPoints));
-    }
-    return applyComplementaryFilter(updatedData);
-  });
-};
-
-const TelemetryVisualization = () => {
-  const [data, setData] = useState([]);
-  const [filteredData, setFilteredData] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('acceleration');
-  const [currentPoint, setCurrentPoint] = useState(null);
-  const canvasRef = useRef(null);
-  const [filter, setFilter] = useState(true);
-  const [isRealtime, setIsRealtime] = useState(false);
-  const [realtimeInterval, setRealtimeInterval] = useState(null);
-  const [firstFetchTimestamp, setFirstFetchTimestamp] = useState(0);
+const TelemetryVisualization: React.FC = () => {
+  const [data, setData] = useState<SensorDataPoint[]>([]);
+  const [filteredData, setFilteredData] = useState<SensorDataPoint[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [activeTab, setActiveTab] = useState<string>('acceleration');
+  const [currentPoint, setCurrentPoint] = useState<SensorDataPoint | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [filter, setFilter] = useState<boolean>(true);
+  const [isRealtime, setIsRealtime] = useState<boolean>(false);
+  const [realtimeInterval, setRealtimeInterval] = useState<NodeJS.Timeout | null>(null);
+  const [firstFetchTimestamp, setFirstFetchTimestamp] = useState<number>(0);
 
   // Dimensioni del razzo per la visualizzazione 3D
   const rocketLength = 80;
   const rocketWidth = 20;
 
-
-// Versione migliorata della funzione fetchRealtimeData
-const fetchRealtimeData = async () => {
-  let retries = 3; // Numero di tentativi in caso di errore
-  
-  const attemptFetch = async () => {
-    
-    try {
-      const jsonData = await mockRocketApi();
-
-      /*    
-      const response = await fetch('http://192.168.4.1/imudata', {
-        // Aggiungi un timeout per evitare attese infinite
-        signal: AbortSignal.timeout(2000)
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Errore nella richiesta: ${response.status}`);
-      } 
-      
-      const jsonData = await response.json();
-      */
-      
-      // Timestamp attuale in millisecondi
-      const currentTimestamp = Date.now();
-      
-      // Crea un nuovo punto dati
-      const newDataPoint = {
-        timestamp: jsonData.system.millis,
-        relativeTime: (currentTimestamp - firstFetchTimestamp) / 1000, // in secondi
-        accelX: jsonData.sensors.accel.x,
-        accelY: jsonData.sensors.accel.y,
-        accelZ: jsonData.sensors.accel.z,
-        gyroX: jsonData.sensors.gyro.x,
-        gyroY: jsonData.sensors.gyro.y,
-        gyroZ: jsonData.sensors.gyro.z,
-        // Se l'altitudine è presente nei dati, la utilizziamo, altrimenti impostiamo un valore predefinito
-        altitude: jsonData.sensors.altitude !== undefined ? jsonData.sensors.altitude : 0
-      };
-      
-      // Aggiungiamo il nuovo punto ai dati esistenti
-      setData(prevData => {
-        const newData = [...prevData, newDataPoint];
-        // Se ci sono troppi punti, rimuoviamo quelli più vecchi
-        if (newData.length > 300) { // Limitato a 300 punti per prestazioni migliori
-          return newData.slice(newData.length - 300);
-        }
-        return newData;
-      });
-      
-      // Applichiamo il filtro di fusione
-      setFilteredData(prevFiltered => {
-        const updatedData = [...prevFiltered, newDataPoint];
-        const maxPoints = 300;
-        if (updatedData.length > maxPoints) {
-          return applyComplementaryFilter(updatedData.slice(updatedData.length - maxPoints));
-        }
-        return applyComplementaryFilter(updatedData);
-      });
-      
-      // Aggiorniamo il punto corrente
-      setCurrentPoint(prevFiltered => {
-        if (prevFiltered && prevFiltered.length > 0) {
-          return prevFiltered[prevFiltered.length - 1];
-        }
-        return newDataPoint;
-      });
-      
-    } catch (error) {
-      console.error('Errore nel recupero dei dati in tempo reale:', error);
-      
-      retries--;
-      if (retries > 0) {
-        console.log(`Tentativo di riconnessione... (${retries} rimasti)`);
-        return await attemptFetch(); // Riprova
-      } else {
-        // Dopo 3 tentativi falliti, disattiviamo la modalità real-time
-        console.error('Connessione persa dopo multipli tentativi.');
-        stopRealtimeData();
-      }
-    }
+  // Funzione per simulare dei dati
+  const mockRocketApi = (): Promise<ApiResponse> => {
+    // Simula il ritardo di rete
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        // Genera dati fake che simulano il movimento del razzo
+        const time = Date.now();
+        const oscillation = Math.sin(time / 1000);
+        const fastOscillation = Math.sin(time / 200);
+        
+        resolve({
+          sensors: {
+            accel: {
+              x: oscillation * 0.5,
+              y: Math.cos(time / 1500) * 0.3,
+              z: -1 + fastOscillation * 0.1
+            },
+            gyro: {
+              x: Math.cos(time / 800) * 15,
+              y: oscillation * 10,
+              z: fastOscillation * 25
+            },
+            // Aggiungi l'altitudine simulata (oscillante)
+            altitude: 100 + Math.sin(time / 3000) * 20
+          },
+          system: {
+            millis: time
+          }
+        });
+      }, 100); // Simula 100ms di latenza
+    });
   };
-  
-  await attemptFetch();
-};
 
-// Funzione per simulare dei dati
-const mockRocketApi = () => {
-  // Simula il ritardo di rete
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      // Genera dati fake che simulano il movimento del razzo
-      const time = Date.now();
-      const oscillation = Math.sin(time / 1000);
-      const fastOscillation = Math.sin(time / 200);
-      
-      resolve({
-        sensors: {
-          accel: {
-            x: oscillation * 0.5,
-            y: Math.cos(time / 1500) * 0.3,
-            z: -1 + fastOscillation * 0.1
-          },
-          gyro: {
-            x: Math.cos(time / 800) * 15,
-            y: oscillation * 10,
-            z: fastOscillation * 25
-          },
-          // Aggiungi l'altitudine simulata (oscillante)
-          altitude: 100 + Math.sin(time / 3000) * 20
-        },
-        system: {
-          millis: time
+  // Versione migliorata della funzione fetchRealtimeData
+  const fetchRealtimeData = async (): Promise<void> => {
+    let retries = 3; // Numero di tentativi in caso di errore
+    
+    const attemptFetch = async (): Promise<void> => {
+      try {
+        const jsonData = await mockRocketApi();
+        
+        /*    
+        const response = await fetch('http://192.168.4.1/imudata', {
+          // Aggiungi un timeout per evitare attese infinite
+          signal: AbortSignal.timeout(2000)
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Errore nella richiesta: ${response.status}`);
+        } 
+        
+        const jsonData = await response.json();
+        */
+        
+        // Timestamp attuale in millisecondi
+        const currentTimestamp = Date.now();
+        
+        // Crea un nuovo punto dati
+        const newDataPoint: SensorDataPoint = {
+          timestamp: jsonData.system.millis,
+          relativeTime: (currentTimestamp - firstFetchTimestamp) / 1000, // in secondi
+          accelX: jsonData.sensors.accel.x,
+          accelY: jsonData.sensors.accel.y,
+          accelZ: jsonData.sensors.accel.z,
+          gyroX: jsonData.sensors.gyro.x,
+          gyroY: jsonData.sensors.gyro.y,
+          gyroZ: jsonData.sensors.gyro.z,
+          // Se l'altitudine è presente nei dati, la utilizziamo, altrimenti impostiamo un valore predefinito
+          altitude: jsonData.sensors.altitude !== undefined ? jsonData.sensors.altitude : 0
+        };
+        
+        // Aggiungiamo il nuovo punto ai dati esistenti
+        setData(prevData => {
+          const newData = [...prevData, newDataPoint];
+          // Se ci sono troppi punti, rimuoviamo quelli più vecchi
+          if (newData.length > 300) { // Limitato a 300 punti per prestazioni migliori
+            return newData.slice(newData.length - 300);
+          }
+          return newData;
+        });
+        
+        // Applichiamo il filtro di fusione
+        setFilteredData(prevFiltered => {
+          const updatedData = [...prevFiltered, newDataPoint];
+          const maxPoints = 300;
+          if (updatedData.length > maxPoints) {
+            return applyComplementaryFilter(updatedData.slice(updatedData.length - maxPoints));
+          }
+          return applyComplementaryFilter(updatedData);
+        });
+        
+        // Aggiorniamo il punto corrente
+        setCurrentPoint(prevFiltered => {
+          if (prevFiltered && Array.isArray(prevFiltered) && prevFiltered.length > 0) {
+            return prevFiltered[prevFiltered.length - 1];
+          }
+          return newDataPoint;
+        });
+        
+      } catch (error) {
+        console.error('Errore nel recupero dei dati in tempo reale:', error);
+        
+        retries--;
+        if (retries > 0) {
+          console.log(`Tentativo di riconnessione... (${retries} rimasti)`);
+          return await attemptFetch(); // Riprova
+        } else {
+          // Dopo 3 tentativi falliti, disattiviamo la modalità real-time
+          console.error('Connessione persa dopo multipli tentativi.');
+          stopRealtimeData();
         }
-      });
-    }, 100); // Simula 100ms di latenza
-  });
-};
+      }
+    };
+    
+    await attemptFetch();
+  };
 
+  // Funzione per avviare il recupero dei dati in tempo reale
+  const startRealtimeData = (): void => {
+    if (isRealtime) return; // Se è già attivo, non facciamo nulla
+    
+    // Memorizziamo il timestamp del primo fetch
+    setFirstFetchTimestamp(Date.now());
+    
+    // Puliamo i dati esistenti
+    setData([]);
+    setFilteredData([]);
+    
+    // Avviamo il polling ad intervalli regolari (ogni 100ms)
+    const interval = setInterval(fetchRealtimeData, 100);
+    setRealtimeInterval(interval);
+    setIsRealtime(true);
+  };
 
-// Funzione per avviare il recupero dei dati in tempo reale
-const startRealtimeData = () => {
-  if (isRealtime) return; // Se è già attivo, non facciamo nulla
-  
-  // Memorizziamo il timestamp del primo fetch
-  setFirstFetchTimestamp(Date.now());
-  
-  // Puliamo i dati esistenti
-  setData([]);
-  setFilteredData([]);
-  
-  // Avviamo il polling ad intervalli regolari (ogni 100ms)
-  const interval = setInterval(fetchRealtimeData, 100);
-  setRealtimeInterval(interval);
-  setIsRealtime(true);
-};
-
-// Funzione per fermare il recupero dei dati in tempo reale
-const stopRealtimeData = () => {
-  if (realtimeInterval) {
-    clearInterval(realtimeInterval);
-    setRealtimeInterval(null);
-  }
-  setIsRealtime(false);
-};
-
-// Pulizia dell'intervallo quando il componente viene smontato
-useEffect(() => {
-  return () => {
+  // Funzione per fermare il recupero dei dati in tempo reale
+  const stopRealtimeData = (): void => {
     if (realtimeInterval) {
       clearInterval(realtimeInterval);
+      setRealtimeInterval(null);
     }
+    setIsRealtime(false);
   };
-}, [realtimeInterval]);
 
-
+  // Pulizia dell'intervallo quando il componente viene smontato
+  useEffect(() => {
+    return () => {
+      if (realtimeInterval) {
+        clearInterval(realtimeInterval);
+      }
+    };
+  }, [realtimeInterval]);
   
   // Funzione per caricare un file selezionato dall'utente
-  const handleFileSelect = async (event) => {
-    const file = event.target.files[0];
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.target.files?.[0];
     if (!file) return;
     
     try {
       setIsLoading(true);
-      const fileContent = await new Promise((resolve) => {
+      const fileContent = await new Promise<string>((resolve) => {
         const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target.result);
+        reader.onload = (e) => {
+          if (e.target && typeof e.target.result === 'string') {
+            resolve(e.target.result);
+          }
+        };
         reader.readAsText(file);
       });
       
@@ -286,10 +295,11 @@ useEffect(() => {
   };
   
   // Funzione per caricare il file predefinito
-  const loadDefaultFile = async () => {
+  const loadDefaultFile = async (): Promise<void> => {
     try {
       setIsLoading(true);
-      const fileContent = await window.fs.readFile('paste.txt', { encoding: 'utf8' });
+      // Utilizziamo il tipo definito in index.d.ts per window.fs
+      const fileContent = await (window as any).fs.readFile('paste.txt', { encoding: 'utf8' });
       processData(fileContent);
     } catch (error) {
       console.error('Errore nel caricamento del file predefinito:', error);
@@ -298,14 +308,14 @@ useEffect(() => {
   };
   
   // Funzione per processare i dati CSV
-  const processData = (fileContent) => {
+  const processData = (fileContent: string): void => {
     // Parsing del CSV
     const rows = fileContent.split('\n').filter(row => row.trim().length > 0);
     const headers = rows[0].split('\t').map(h => h.trim());
     
-    const parsedData = rows.slice(1).map(row => {
+    const parsedData: SensorDataPoint[] = rows.slice(1).map(row => {
       const values = row.split('\t');
-      const rowData = {};
+      const rowData: Record<string, number> = {};
       
       headers.forEach((header, index) => {
         if (index === 0) {
@@ -315,7 +325,7 @@ useEffect(() => {
         }
       });
       
-      return rowData;
+      return rowData as unknown as SensorDataPoint;
     });
     
     // Calcolo del timestamp relativo
@@ -343,258 +353,258 @@ useEffect(() => {
     loadDefaultFile();
   }, []);
   
-// This is the updated code for the 3D visualization function in useEffect
-useEffect(() => {
-  if (!currentPoint || !canvasRef.current) return;
-  
-  const canvas = canvasRef.current;
-  const ctx = canvas.getContext('2d');
-  const width = canvas.width;
-  const height = canvas.height;
-  
-  // Pulisci il canvas
-  ctx.clearRect(0, 0, width, height);
-  
-  // Centro del canvas
-  const centerX = width / 2;
-  const centerY = height / 2;
-  
-  // Converte gli angoli in radianti
-  const roll = filter ? degToRad(currentPoint.roll) : 0;
-  const pitch = filter ? degToRad(currentPoint.pitch) : 0;
-  const yaw = filter ? degToRad(currentPoint.yaw) : 0;
-  
-  // Disegna gli assi di riferimento
-  const axisLength = 40;
-  ctx.lineWidth = 1;
-  
-  // Asse X (rosso)
-  ctx.strokeStyle = '#ff0000';
-  ctx.beginPath();
-  ctx.moveTo(10, height - 10);
-  ctx.lineTo(10 + axisLength, height - 10);
-  ctx.stroke();
-  ctx.fillStyle = '#ff0000';
-  ctx.fillText('X', 10 + axisLength + 5, height - 7);
-  
-  // Asse Y (verde)
-  ctx.strokeStyle = '#00ff00';
-  ctx.beginPath();
-  ctx.moveTo(10, height - 10);
-  ctx.lineTo(10, height - 10 - axisLength);
-  ctx.stroke();
-  ctx.fillStyle = '#00ff00';
-  ctx.fillText('Y', 10, height - 10 - axisLength - 5);
-  
-  // Asse Z (blu)
-  ctx.strokeStyle = '#0000ff';
-  ctx.beginPath();
-  ctx.moveTo(10, height - 10);
-  ctx.lineTo(10 + axisLength * 0.7, height - 10 - axisLength * 0.7);
-  ctx.stroke();
-  ctx.fillStyle = '#0000ff';
-  ctx.fillText('Z', 10 + axisLength * 0.7 + 5, height - 10 - axisLength * 0.7 - 5);
-  
-  ctx.save();
-  ctx.translate(centerX, centerY);
-  
-  // Ruota di 180 gradi in pitch per mettere la punta del razzo verso l'alto inizialmente
-  const initialPitch = Math.PI;
-  
-  // CORREZIONE: Applicazione delle rotazioni con ordine corretto per visualizzare meglio lo yaw
-  // Primo passo: rotazione per lo yaw (attorno all'asse Z)
-  ctx.rotate(yaw);
-  
-  // Secondo passo: rotazione per il pitch (attorno all'asse Y)
-  ctx.rotate(pitch + initialPitch);
-  
-  // Terzo passo: rotazione per il roll (attorno all'asse X)
-  ctx.rotate(roll);
-  
-  // Disegna il corpo del razzo
-  ctx.fillStyle = '#d0d0d0';
-  ctx.strokeStyle = '#000';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.rect(-rocketWidth / 2, -rocketLength / 2, rocketWidth, rocketLength);
-  ctx.fill();
-  ctx.stroke();
-  
-  // Disegna la punta del razzo
-  ctx.fillStyle = '#ff4444';
-  ctx.beginPath();
-  ctx.moveTo(-rocketWidth / 2, -rocketLength / 2);
-  ctx.lineTo(0, -rocketLength / 2 - 20);
-  ctx.lineTo(rocketWidth / 2, -rocketLength / 2);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  
-  // Disegna le alette con colori più visibili per distinguere l'orientamento
-  
-  // Aletta 1 (sinistra)
-  ctx.fillStyle = '#4444ff';
-  ctx.beginPath();
-  ctx.moveTo(-rocketWidth / 2, rocketLength / 2);
-  ctx.lineTo(-rocketWidth / 2 - 15, rocketLength / 2 + 20);
-  ctx.lineTo(-rocketWidth / 2, rocketLength / 2 - 10);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  
-  // Aletta 2 (destra)
-  ctx.fillStyle = '#4444ff';
-  ctx.beginPath();
-  ctx.moveTo(rocketWidth / 2, rocketLength / 2);
-  ctx.lineTo(rocketWidth / 2 + 15, rocketLength / 2 + 20);
-  ctx.lineTo(rocketWidth / 2, rocketLength / 2 - 10);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  
-  // Aletta 3 (posteriore - in diverso colore per distinguere meglio la rotazione yaw)
-  ctx.fillStyle = '#44ff44';
-  ctx.beginPath();
-  ctx.moveTo(0, rocketLength / 2);
-  ctx.lineTo(0, rocketLength / 2 + 20);
-  ctx.lineTo(10, rocketLength / 2 - 5);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  
-  // Aletta 4 (anteriore - in diverso colore per distinguere meglio la rotazione yaw)
-  ctx.fillStyle = '#ff44ff';
-  ctx.beginPath();
-  ctx.moveTo(0, rocketLength / 2);
-  ctx.lineTo(0, rocketLength / 2 + 20);
-  ctx.lineTo(-10, rocketLength / 2 - 5);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  
-  // Aggiungi un indicatore di direzione per visualizzare meglio lo yaw
-  ctx.fillStyle = '#ff8800';
-  ctx.beginPath();
-  ctx.arc(0, -rocketLength / 2 - 10, 5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
+  // This is the updated code for the 3D visualization function in useEffect
+  useEffect(() => {
+    if (!currentPoint || !canvasRef.current) return;
+    
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return; // Assicurati che ctx non sia null
+    
+    const width = canvas.width;
+    const height = canvas.height;
+    
+    // Pulisci il canvas
+    ctx.clearRect(0, 0, width, height);
+    
+    // Centro del canvas
+    const centerX = width / 2;
+    const centerY = height / 2;
+    
+    // Converte gli angoli in radianti
+    const roll = filter && currentPoint.roll ? degToRad(currentPoint.roll) : 0;
+    const pitch = filter && currentPoint.pitch ? degToRad(currentPoint.pitch) : 0;
+    const yaw = filter && currentPoint.yaw ? degToRad(currentPoint.yaw) : 0;
+    
+    // Disegna gli assi di riferimento
+    const axisLength = 40;
+    ctx.lineWidth = 1;
+    
+    // Asse X (rosso)
+    ctx.strokeStyle = '#ff0000';
+    ctx.beginPath();
+    ctx.moveTo(10, height - 10);
+    ctx.lineTo(10 + axisLength, height - 10);
+    ctx.stroke();
+    ctx.fillStyle = '#ff0000';
+    ctx.fillText('X', 10 + axisLength + 5, height - 7);
+    
+    // Asse Y (verde)
+    ctx.strokeStyle = '#00ff00';
+    ctx.beginPath();
+    ctx.moveTo(10, height - 10);
+    ctx.lineTo(10, height - 10 - axisLength);
+    ctx.stroke();
+    ctx.fillStyle = '#00ff00';
+    ctx.fillText('Y', 10, height - 10 - axisLength - 5);
+    
+    // Asse Z (blu)
+    ctx.strokeStyle = '#0000ff';
+    ctx.beginPath();
+    ctx.moveTo(10, height - 10);
+    ctx.lineTo(10 + axisLength * 0.7, height - 10 - axisLength * 0.7);
+    ctx.stroke();
+    ctx.fillStyle = '#0000ff';
+    ctx.fillText('Z', 10 + axisLength * 0.7 + 5, height - 10 - axisLength * 0.7 - 5);
+    
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    
+    // Ruota di 180 gradi in pitch per mettere la punta del razzo verso l'alto inizialmente
+    const initialPitch = Math.PI;
+    
+    // CORREZIONE: Applicazione delle rotazioni con ordine corretto per visualizzare meglio lo yaw
+    // Primo passo: rotazione per lo yaw (attorno all'asse Z)
+    ctx.rotate(yaw);
+    
+    // Secondo passo: rotazione per il pitch (attorno all'asse Y)
+    ctx.rotate(pitch + initialPitch);
+    
+    // Terzo passo: rotazione per il roll (attorno all'asse X)
+    ctx.rotate(roll);
+    
+    // Disegna il corpo del razzo
+    ctx.fillStyle = '#d0d0d0';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.rect(-rocketWidth / 2, -rocketLength / 2, rocketWidth, rocketLength);
+    ctx.fill();
+    ctx.stroke();
+    
+    // Disegna la punta del razzo
+    ctx.fillStyle = '#ff4444';
+    ctx.beginPath();
+    ctx.moveTo(-rocketWidth / 2, -rocketLength / 2);
+    ctx.lineTo(0, -rocketLength / 2 - 20);
+    ctx.lineTo(rocketWidth / 2, -rocketLength / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Disegna le alette con colori più visibili per distinguere l'orientamento
+    
+    // Aletta 1 (sinistra)
+    ctx.fillStyle = '#4444ff';
+    ctx.beginPath();
+    ctx.moveTo(-rocketWidth / 2, rocketLength / 2);
+    ctx.lineTo(-rocketWidth / 2 - 15, rocketLength / 2 + 20);
+    ctx.lineTo(-rocketWidth / 2, rocketLength / 2 - 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Aletta 2 (destra)
+    ctx.fillStyle = '#4444ff';
+    ctx.beginPath();
+    ctx.moveTo(rocketWidth / 2, rocketLength / 2);
+    ctx.lineTo(rocketWidth / 2 + 15, rocketLength / 2 + 20);
+    ctx.lineTo(rocketWidth / 2, rocketLength / 2 - 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Aletta 3 (posteriore - in diverso colore per distinguere meglio la rotazione yaw)
+    ctx.fillStyle = '#44ff44';
+    ctx.beginPath();
+    ctx.moveTo(0, rocketLength / 2);
+    ctx.lineTo(0, rocketLength / 2 + 20);
+    ctx.lineTo(10, rocketLength / 2 - 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Aletta 4 (anteriore - in diverso colore per distinguere meglio la rotazione yaw)
+    ctx.fillStyle = '#ff44ff';
+    ctx.beginPath();
+    ctx.moveTo(0, rocketLength / 2);
+    ctx.lineTo(0, rocketLength / 2 + 20);
+    ctx.lineTo(-10, rocketLength / 2 - 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    // Aggiungi un indicatore di direzione per visualizzare meglio lo yaw
+    ctx.fillStyle = '#ff8800';
+    ctx.beginPath();
+    ctx.arc(0, -rocketLength / 2 - 10, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
 
-    // Disegna i vettori di accelerazione come prima...
-    if (currentPoint) {
-      const accelScale = 50; // Scala per il vettore di accelerazione
-      
-      // Vettore X (rosso)
-      const accelX = currentPoint.accelX * accelScale;
-      ctx.strokeStyle = '#ff0000';
-      ctx.lineWidth = 2;
+    // Disegna i vettori di accelerazione
+    const accelScale = 50; // Scala per il vettore di accelerazione
+    
+    // Vettore X (rosso)
+    const accelX = currentPoint.accelX * accelScale;
+    ctx.strokeStyle = '#ff0000';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -accelX);  // L'asse X del razzo punta verso la punta
+    ctx.stroke();
+    
+    // Freccia X
+    if (Math.abs(accelX) > 5) {
+      const arrowSize = 5;
+      ctx.beginPath();
+      if (accelX > 0) {
+        ctx.moveTo(0, -accelX);
+        ctx.lineTo(-arrowSize, -accelX + arrowSize);
+        ctx.lineTo(arrowSize, -accelX + arrowSize);
+      } else {
+        ctx.moveTo(0, -accelX);
+        ctx.lineTo(-arrowSize, -accelX - arrowSize);
+        ctx.lineTo(arrowSize, -accelX - arrowSize);
+      }
+      ctx.closePath();
+      ctx.fillStyle = '#ff0000';
+      ctx.fill();
+    }
+    
+    // Vettore Y (verde)
+    const accelY = currentPoint.accelY * accelScale;
+    ctx.strokeStyle = '#00ff00';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(accelY, 0);  // L'asse Y del razzo è laterale
+    ctx.stroke();
+    
+    // Freccia Y
+    if (Math.abs(accelY) > 5) {
+      const arrowSize = 5;
+      ctx.beginPath();
+      if (accelY > 0) {
+        ctx.moveTo(accelY, 0);
+        ctx.lineTo(accelY - arrowSize, -arrowSize);
+        ctx.lineTo(accelY - arrowSize, arrowSize);
+      } else {
+        ctx.moveTo(accelY, 0);
+        ctx.lineTo(accelY + arrowSize, -arrowSize);
+        ctx.lineTo(accelY + arrowSize, arrowSize);
+      }
+      ctx.closePath();
+      ctx.fillStyle = '#00ff00';
+      ctx.fill();
+    }
+    
+    // Vettore Z (blu)
+    const accelZ = currentPoint.accelZ * accelScale;
+    ctx.strokeStyle = '#0000ff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, accelZ);  // L'asse Z del razzo è verso la parte posteriore
+    ctx.stroke();
+    
+    // Freccia Z
+    if (Math.abs(accelZ) > 5) {
+      const arrowSize = 5;
+      ctx.beginPath();
+      if (accelZ > 0) {
+        ctx.moveTo(0, accelZ);
+        ctx.lineTo(-arrowSize, accelZ - arrowSize);
+        ctx.lineTo(arrowSize, accelZ - arrowSize);
+      } else {
+        ctx.moveTo(0, accelZ);
+        ctx.lineTo(-arrowSize, accelZ + arrowSize);
+        ctx.lineTo(arrowSize, accelZ + arrowSize);
+      }
+      ctx.closePath();
+      ctx.fillStyle = '#0000ff';
+      ctx.fill();
+    }
+    
+    // Vettore di accelerazione totale (viola)
+    const totalAccel = Math.sqrt(accelX*accelX + accelY*accelY + accelZ*accelZ);
+    if (totalAccel > 5) {
+      ctx.strokeStyle = '#800080';
+      ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.moveTo(0, 0);
-      ctx.lineTo(0, -accelX);  // L'asse X del razzo punta verso la punta
+      ctx.lineTo(accelY, -accelX + accelZ);
       ctx.stroke();
       
-      // Freccia X
-      if (Math.abs(accelX) > 5) {
-        const arrowSize = 5;
-        ctx.beginPath();
-        if (accelX > 0) {
-          ctx.moveTo(0, -accelX);
-          ctx.lineTo(-arrowSize, -accelX + arrowSize);
-          ctx.lineTo(arrowSize, -accelX + arrowSize);
-        } else {
-          ctx.moveTo(0, -accelX);
-          ctx.lineTo(-arrowSize, -accelX - arrowSize);
-          ctx.lineTo(arrowSize, -accelX - arrowSize);
-        }
-        ctx.closePath();
-        ctx.fillStyle = '#ff0000';
-        ctx.fill();
-      }
-      
-      // Vettore Y (verde)
-      const accelY = currentPoint.accelY * accelScale;
-      ctx.strokeStyle = '#00ff00';
-      ctx.lineWidth = 2;
+      // Freccia per l'accelerazione totale
+      const arrowSize = 6;
+      const angle = Math.atan2(-accelX + accelZ, accelY);
       ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(accelY, 0);  // L'asse Y del razzo è laterale
-      ctx.stroke();
-      
-      // Freccia Y
-      if (Math.abs(accelY) > 5) {
-        const arrowSize = 5;
-        ctx.beginPath();
-        if (accelY > 0) {
-          ctx.moveTo(accelY, 0);
-          ctx.lineTo(accelY - arrowSize, -arrowSize);
-          ctx.lineTo(accelY - arrowSize, arrowSize);
-        } else {
-          ctx.moveTo(accelY, 0);
-          ctx.lineTo(accelY + arrowSize, -arrowSize);
-          ctx.lineTo(accelY + arrowSize, arrowSize);
-        }
-        ctx.closePath();
-        ctx.fillStyle = '#00ff00';
-        ctx.fill();
-      }
-      
-      // Vettore Z (blu)
-      const accelZ = currentPoint.accelZ * accelScale;
-      ctx.strokeStyle = '#0000ff';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(0, accelZ);  // L'asse Z del razzo è verso la parte posteriore
-      ctx.stroke();
-      
-      // Freccia Z
-      if (Math.abs(accelZ) > 5) {
-        const arrowSize = 5;
-        ctx.beginPath();
-        if (accelZ > 0) {
-          ctx.moveTo(0, accelZ);
-          ctx.lineTo(-arrowSize, accelZ - arrowSize);
-          ctx.lineTo(arrowSize, accelZ - arrowSize);
-        } else {
-          ctx.moveTo(0, accelZ);
-          ctx.lineTo(-arrowSize, accelZ + arrowSize);
-          ctx.lineTo(arrowSize, accelZ + arrowSize);
-        }
-        ctx.closePath();
-        ctx.fillStyle = '#0000ff';
-        ctx.fill();
-      }
-      
-      // Vettore di accelerazione totale (viola)
-      const totalAccel = Math.sqrt(accelX*accelX + accelY*accelY + accelZ*accelZ);
-      if (totalAccel > 5) {
-        ctx.strokeStyle = '#800080';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(accelY, -accelX + accelZ);
-        ctx.stroke();
-        
-        // Freccia per l'accelerazione totale
-        const arrowSize = 6;
-        const angle = Math.atan2(-accelX + accelZ, accelY);
-        ctx.beginPath();
-        ctx.moveTo(accelY, -accelX + accelZ);
-        ctx.lineTo(
-          accelY - arrowSize * Math.cos(angle - Math.PI/6), 
-          (-accelX + accelZ) - arrowSize * Math.sin(angle - Math.PI/6)
-        );
-        ctx.lineTo(
-          accelY - arrowSize * Math.cos(angle + Math.PI/6), 
-          (-accelX + accelZ) - arrowSize * Math.sin(angle + Math.PI/6)
-        );
-        ctx.closePath();
-        ctx.fillStyle = '#800080';
-        ctx.fill();
-      }
+      ctx.moveTo(accelY, -accelX + accelZ);
+      ctx.lineTo(
+        accelY - arrowSize * Math.cos(angle - Math.PI/6), 
+        (-accelX + accelZ) - arrowSize * Math.sin(angle - Math.PI/6)
+      );
+      ctx.lineTo(
+        accelY - arrowSize * Math.cos(angle + Math.PI/6), 
+        (-accelX + accelZ) - arrowSize * Math.sin(angle + Math.PI/6)
+      );
+      ctx.closePath();
+      ctx.fillStyle = '#800080';
+      ctx.fill();
     }
     
     ctx.restore();
-  
+
     // Disegna la legenda
     ctx.font = '14px Arial';
     ctx.fillStyle = '#000';
@@ -629,10 +639,10 @@ useEffect(() => {
     ctx.fillStyle = '#000';
     ctx.fillText('Accel Totale', width - 150, legendY + legendSpacing * 3 + 12);
     
-  }, [currentPoint, filter]);
+  }, [currentPoint, filter, rocketLength, rocketWidth]);
   
   // Gestione del movimento del mouse sul grafico
-  const handleMouseMove = (e) => {
+  const handleMouseMove = (e: any): void => {
     if (!e.activePayload || e.activePayload.length === 0) return;
     
     const payload = e.activePayload[0].payload;
@@ -640,7 +650,7 @@ useEffect(() => {
   };
   
   // Formattazione personalizzata per i tooltip
-  const renderTooltip = (props) => {
+  const renderTooltip = (props: any): React.ReactNode => {
     if (!props.active || !props.payload || props.payload.length === 0) {
       return null;
     }
@@ -958,8 +968,8 @@ useEffect(() => {
                   />
                   <YAxis 
                     domain={[
-                      dataMin => Math.floor(dataMin * 10) / 10 - 0.1,
-                      dataMax => Math.ceil(dataMax * 10) / 10 + 0.1
+                      (dataMin: number) => Math.floor(dataMin * 10) / 10 - 0.1,
+                      (dataMax: number) => Math.ceil(dataMax * 10) / 10 + 0.1
                     ]} 
                     label={{ value: 'Altitudine (m)', angle: -90, position: 'insideLeft' }}
                   />
@@ -999,13 +1009,13 @@ useEffect(() => {
                   <div>{currentPoint.accelZ.toFixed(4)}</div>
                   
                   <div>Roll:</div>
-                  <div>{filter ? currentPoint.roll.toFixed(2) : 'N/A'}°</div>
+                  <div>{filter && currentPoint.roll ? currentPoint.roll.toFixed(2) : 'N/A'}°</div>
                   
                   <div>Pitch:</div>
-                  <div>{filter ? currentPoint.pitch.toFixed(2) : 'N/A'}°</div>
+                  <div>{filter && currentPoint.pitch ? currentPoint.pitch.toFixed(2) : 'N/A'}°</div>
                   
                   <div>Yaw:</div>
-                  <div>{filter ? currentPoint.yaw.toFixed(2) : 'N/A'}°</div>
+                  <div>{filter && currentPoint.yaw ? currentPoint.yaw.toFixed(2) : 'N/A'}°</div>
                   
                   <div>Altitudine:</div>
                   <div>{currentPoint.altitude.toFixed(3)} m</div>

@@ -104,61 +104,129 @@ const TelemetryVisualization = () => {
   const [realtimeInterval, setRealtimeInterval] = useState(null);
   const [firstFetchTimestamp, setFirstFetchTimestamp] = useState(0);
 
-  // Aggiungi queste variabili di stato nella sezione degli useState
-const [isRealtime, setIsRealtime] = useState(false);
-const [realtimeInterval, setRealtimeInterval] = useState(null);
+  // Dimensioni del razzo per la visualizzazione 3D
+  const rocketLength = 80;
+  const rocketWidth = 20;
 
-// Funzione per il fetch dei dati in tempo reale
+
+// Versione migliorata della funzione fetchRealtimeData
 const fetchRealtimeData = async () => {
-  try {
-    const response = await fetch('http://192.168.4.1/imudata');
-    if (!response.ok) {
-      throw new Error(`Errore nella richiesta: ${response.status}`);
-    }
+  let retries = 3; // Numero di tentativi in caso di errore
+  
+  const attemptFetch = async () => {
     
-    const jsonData = await response.json();
-    
-    // Timestamp attuale in millisecondi
-    const currentTimestamp = Date.now();
-    
-    // Crea un nuovo punto dati
-    const newDataPoint = {
-      timestamp: jsonData.system.millis,
-      relativeTime: (currentTimestamp - firstFetchTimestamp) / 1000, // in secondi
-      accelX: jsonData.sensors.accel.x,
-      accelY: jsonData.sensors.accel.y,
-      accelZ: jsonData.sensors.accel.z,
-      gyroX: jsonData.sensors.gyro.x,
-      gyroY: jsonData.sensors.gyro.y,
-      gyroZ: jsonData.sensors.gyro.z,
-      // Se l'altitudine è presente nei dati, la utilizziamo, altrimenti impostiamo un valore predefinito
-      altitude: jsonData.sensors.altitude !== undefined ? jsonData.sensors.altitude : 0
-    };
-    
-    // Aggiungiamo il nuovo punto ai dati esistenti
-    setData(prevData => {
-      const newData = [...prevData, newDataPoint];
-      // Se ci sono troppi punti, rimuoviamo quelli più vecchi
-      if (newData.length > 1000) {
-        return newData.slice(newData.length - 1000);
+    try {
+      const jsonData = await mockRocketApi();
+
+      /*    
+      const response = await fetch('http://192.168.4.1/imudata', {
+        // Aggiungi un timeout per evitare attese infinite
+        signal: AbortSignal.timeout(2000)
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Errore nella richiesta: ${response.status}`);
+      } 
+      
+      const jsonData = await response.json();
+      */
+      
+      // Timestamp attuale in millisecondi
+      const currentTimestamp = Date.now();
+      
+      // Crea un nuovo punto dati
+      const newDataPoint = {
+        timestamp: jsonData.system.millis,
+        relativeTime: (currentTimestamp - firstFetchTimestamp) / 1000, // in secondi
+        accelX: jsonData.sensors.accel.x,
+        accelY: jsonData.sensors.accel.y,
+        accelZ: jsonData.sensors.accel.z,
+        gyroX: jsonData.sensors.gyro.x,
+        gyroY: jsonData.sensors.gyro.y,
+        gyroZ: jsonData.sensors.gyro.z,
+        // Se l'altitudine è presente nei dati, la utilizziamo, altrimenti impostiamo un valore predefinito
+        altitude: jsonData.sensors.altitude !== undefined ? jsonData.sensors.altitude : 0
+      };
+      
+      // Aggiungiamo il nuovo punto ai dati esistenti
+      setData(prevData => {
+        const newData = [...prevData, newDataPoint];
+        // Se ci sono troppi punti, rimuoviamo quelli più vecchi
+        if (newData.length > 300) { // Limitato a 300 punti per prestazioni migliori
+          return newData.slice(newData.length - 300);
+        }
+        return newData;
+      });
+      
+      // Applichiamo il filtro di fusione
+      setFilteredData(prevFiltered => {
+        const updatedData = [...prevFiltered, newDataPoint];
+        const maxPoints = 300;
+        if (updatedData.length > maxPoints) {
+          return applyComplementaryFilter(updatedData.slice(updatedData.length - maxPoints));
+        }
+        return applyComplementaryFilter(updatedData);
+      });
+      
+      // Aggiorniamo il punto corrente
+      setCurrentPoint(prevFiltered => {
+        if (prevFiltered && prevFiltered.length > 0) {
+          return prevFiltered[prevFiltered.length - 1];
+        }
+        return newDataPoint;
+      });
+      
+    } catch (error) {
+      console.error('Errore nel recupero dei dati in tempo reale:', error);
+      
+      retries--;
+      if (retries > 0) {
+        console.log(`Tentativo di riconnessione... (${retries} rimasti)`);
+        return await attemptFetch(); // Riprova
+      } else {
+        // Dopo 3 tentativi falliti, disattiviamo la modalità real-time
+        console.error('Connessione persa dopo multipli tentativi.');
+        stopRealtimeData();
       }
-      return newData;
-    });
-    
-    // Applichiamo il filtro di fusione
-    const updatedData = [...filteredData, newDataPoint];
-    const filteredResult = applyComplementaryFilter(updatedData);
-    setFilteredData(filteredResult);
-    
-    // Aggiorniamo il punto corrente
-    setCurrentPoint(filteredResult[filteredResult.length - 1]);
-    
-  } catch (error) {
-    console.error('Errore nel recupero dei dati in tempo reale:', error);
-    // In caso di errore, disattiviamo la modalità real-time
-    stopRealtimeData();
-  }
+    }
+  };
+  
+  await attemptFetch();
 };
+
+// Funzione per simulare dei dati
+const mockRocketApi = () => {
+  // Simula il ritardo di rete
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      // Genera dati fake che simulano il movimento del razzo
+      const time = Date.now();
+      const oscillation = Math.sin(time / 1000);
+      const fastOscillation = Math.sin(time / 200);
+      
+      resolve({
+        sensors: {
+          accel: {
+            x: oscillation * 0.5,
+            y: Math.cos(time / 1500) * 0.3,
+            z: -1 + fastOscillation * 0.1
+          },
+          gyro: {
+            x: Math.cos(time / 800) * 15,
+            y: oscillation * 10,
+            z: fastOscillation * 25
+          },
+          // Aggiungi l'altitudine simulata (oscillante)
+          altitude: 100 + Math.sin(time / 3000) * 20
+        },
+        system: {
+          millis: time
+        }
+      });
+    }, 100); // Simula 100ms di latenza
+  });
+};
+
 
 // Funzione per avviare il recupero dei dati in tempo reale
 const startRealtimeData = () => {
@@ -195,8 +263,7 @@ useEffect(() => {
   };
 }, [realtimeInterval]);
 
-// Aggiungi questa variabile di stato
-const [firstFetchTimestamp, setFirstFetchTimestamp] = useState(0);
+
   
   // Funzione per caricare un file selezionato dall'utente
   const handleFileSelect = async (event) => {

@@ -667,6 +667,110 @@ const TelemetryVisualization: React.FC = () => {
   const [isRealtime, setIsRealtime] = useState<boolean>(false);
   const [realtimeInterval, setRealtimeInterval] = useState<NodeJS.Timeout | null>(null);
   const [firstFetchTimestamp, setFirstFetchTimestamp] = useState<number>(0);
+  // WebSocket connection state
+  const [wsConnected, setWsConnected] = useState<boolean>(false);
+  const [wsError, setWsError] = useState<string | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  // Funzione per connettersi al WebSocket
+  const connectWebSocket = () => {
+    // Determina l'URL del WebSocket
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsHost = '192.168.4.1'; // Indirizzo dell'ESP8266
+    const wsUrl = `${wsProtocol}//${wsHost}/ws`;
+    
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+    
+    ws.onopen = () => {
+      console.log('WebSocket connesso');
+      setWsConnected(true);
+      setWsError(null);
+    };
+    
+    ws.onerror = (error) => {
+      console.error('Errore WebSocket:', error);
+      setWsError('Errore di connessione al WebSocket');
+      setWsConnected(false);
+    };
+    
+    ws.onclose = () => {
+      console.log('WebSocket disconnesso');
+      setWsConnected(false);
+      
+      // Riconnessione automatica dopo 3 secondi
+      setTimeout(() => {
+        if (isRealtime) {
+          connectWebSocket();
+        }
+      }, 3000);
+    };
+    
+    ws.onmessage = (event) => {
+      try {
+        const telemetryData = JSON.parse(event.data);
+        
+        // Crea un nuovo punto dati dal messaggio WebSocket
+        const newDataPoint: SensorDataPoint = {
+          timestamp: telemetryData.timestamp,
+          relativeTime: (Date.now() - firstFetchTimestamp) / 1000,
+          accelX: telemetryData.accel.x,
+          accelY: telemetryData.accel.y,
+          accelZ: telemetryData.accel.z,
+          gyroX: telemetryData.gyro.x,
+          gyroY: telemetryData.gyro.y,
+          gyroZ: telemetryData.gyro.z,
+          altitude: telemetryData.altitude,
+          temperature: telemetryData.temperature,
+          analogValue: 0 // Se non presente nel messaggio, usa un valore di default
+        };
+        
+        // Aggiorna i dati
+        setData(prevData => {
+          const newData = [...prevData, newDataPoint];
+          if (newData.length > 300) {
+            return newData.slice(newData.length - 300);
+          }
+          return newData;
+        });
+        
+        // Applica il filtro selezionato
+        setFilteredData(prevFiltered => {
+          const updatedData = [...prevFiltered, newDataPoint];
+          const maxPoints = 300;
+          let filtered;
+          
+          if (updatedData.length > maxPoints) {
+            const slicedData = updatedData.slice(updatedData.length - maxPoints);
+            filtered = applySelectedFilter(slicedData, filterType);
+          } else {
+            filtered = applySelectedFilter(updatedData, filterType);
+          }
+          
+          return filtered;
+        });
+        
+        // Aggiorna il punto corrente
+        setCurrentPoint(filtered => {
+          if (filtered && Array.isArray(filtered) && filtered.length > 0) {
+            return filtered[filtered.length - 1];
+          }
+          return newDataPoint;
+        });
+      } catch (error) {
+        console.error('Errore nell\'elaborazione del messaggio WebSocket:', error);
+      }
+    };
+  };
+
+  // Effetto per gestire la pulizia
+  useEffect(() => {
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, []);
 
   // Funzione per applicare il filtro selezionato ai dati
   const applySelectedFilter = (data: SensorDataPoint[], filterType: FilterType): SensorDataPoint[] => {
@@ -831,21 +935,17 @@ const TelemetryVisualization: React.FC = () => {
     await attemptFetch();
   };
 
-
   // Funzione per avviare il recupero dei dati in tempo reale
   const startRealtimeData = (): void => {
     if (isRealtime) return; // Se è già attivo, non facciamo nulla
     
-    // Memorizziamo il timestamp del primo fetch
     setFirstFetchTimestamp(Date.now());
-    
-    // Puliamo i dati esistenti
     setData([]);
     setFilteredData([]);
     
-    // Avviamo il polling ad intervalli regolari (ogni 100ms)
-    const interval = setInterval(fetchRealtimeData, 100);
-    setRealtimeInterval(interval);
+    // Connetti al WebSocket
+    connectWebSocket();
+    
     setIsRealtime(true);
   };
 
@@ -855,6 +955,13 @@ const TelemetryVisualization: React.FC = () => {
       clearInterval(realtimeInterval);
       setRealtimeInterval(null);
     }
+    
+    // Chiudi la connessione WebSocket
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    
     setIsRealtime(false);
   };
 

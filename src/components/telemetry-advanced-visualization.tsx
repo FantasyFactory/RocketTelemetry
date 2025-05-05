@@ -720,9 +720,7 @@ const TelemetryVisualization: React.FC = () => {
           gyroX: telemetryData.gyro.x,
           gyroY: telemetryData.gyro.y,
           gyroZ: telemetryData.gyro.z,
-          altitude: telemetryData.altitude,
-          temperature: telemetryData.temperature,
-          analogValue: 0 // Se non presente nel messaggio, usa un valore di default
+          altitude: telemetryData.altitude
         };
         
         // Aggiorna i dati
